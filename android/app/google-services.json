@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "540743929564",
+    "project_id": "surfnstay-49415",
+    "storage_bucket": "surfnstay-49415.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:540743929564:android:05bfd545362ed4bd56ee19",
+        "android_client_info": {
+          "package_name": "com.example.surfnstay"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDgm2RM_VYih0z_9PIPgFRVfyQSSDUbZ8M"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
