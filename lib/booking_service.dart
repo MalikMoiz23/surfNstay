@@ -6,7 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 /// details, insert two notifications, mark the source notification read). A
 /// dropped connection part-way through left a confirmed booking that nobody
 /// was told about, or a rejected booking whose dates stayed blocked. The SQL
-/// functions in sql/001_plan_a.sql do all of it atomically and also enforce
+/// functions in sql/surfnstay_setup.sql do all of it atomically and also enforce
 /// that the caller actually owns the property.
 class BookingService {
   static final supabase = Supabase.instance.client;

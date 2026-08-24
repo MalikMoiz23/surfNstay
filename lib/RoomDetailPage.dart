@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:intl/intl.dart';
 import 'ChatScreen.dart';
 import 'app_theme.dart';
+import 'formatting.dart';
 import 'page_transition.dart';
 import 'host_public_profile.dart';
 
@@ -40,6 +43,7 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
   String description = "No description provided";
   String hostName    = "Unknown Host";
   String hostPhone   = "N/A";
+  String? hostVerification; // hosts.verification_status
 
   // New property fields
   String propertyType    = 'Room';
@@ -64,8 +68,18 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
   double averageRating   = 0.0;
   int    totalRatings    = 0;
   double? myExistingRating;  // null if not yet rated
+  String? myExistingReview;
   String? eligibleBookingId; // booking id that qualifies for rating today
   bool   ratingLoading   = false;
+
+  /// Written reviews (B5). `ratings` used to hold a bare number.
+  List<Map<String, dynamic>> reviews = [];
+
+  double? latitude;
+  double? longitude;
+
+  bool get isHost => supabase.auth.currentUser?.id == widget.hostId;
+  bool get hasCoordinates => latitude != null && longitude != null;
 
   static const Map<String, IconData> _typeIcons = {
     'Room':      Icons.meeting_room_rounded,
@@ -101,17 +115,20 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
         discountPercent =
             (double.tryParse(propRes['discount']?.toString() ?? '0') ?? 0)
                 .clamp(0, 100);
+        latitude  = (propRes['latitude']  as num?)?.toDouble();
+        longitude = (propRes['longitude'] as num?)?.toDouble();
       }
 
       // Host details
       final hostRes = await supabase
           .from('hosts')
-          .select('fullName, phone')
+          .select('fullName, phone, verification_status')
           .eq('id', widget.hostId)
           .maybeSingle();
 
       if (hostRes != null) {
         hostName  = hostRes['fullName'] ?? "Unknown Host";
+        hostVerification = hostRes['verification_status']?.toString();
         hostPhone = hostRes['phone']    ?? "N/A";
       }
 
@@ -157,8 +174,10 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
     try {
       final ratingsRes = await supabase
           .from('ratings')
-          .select('rating')
-          .eq('property_id', widget.propertyId);
+          .select('rating, review_text, host_reply, host_replied_at, '
+              'traveller_id, booking_id, created_at')
+          .eq('property_id', widget.propertyId)
+          .order('created_at', ascending: false);
 
       if (ratingsRes.isNotEmpty) {
         final sum = (ratingsRes as List)
@@ -169,6 +188,45 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
         averageRating = 0.0;
         totalRatings  = 0;
       }
+
+      // Resolve reviewer names separately rather than with a PostgREST embed,
+      // which would depend on a foreign key name this code cannot verify.
+      final withText = List<Map<String, dynamic>>.from(ratingsRes)
+          .where((r) =>
+              (r['review_text']?.toString().trim().isNotEmpty ?? false) ||
+              (r['host_reply']?.toString().trim().isNotEmpty ?? false))
+          .toList();
+
+      if (withText.isNotEmpty) {
+        final ids = withText
+            .map((r) => r['traveller_id']?.toString())
+            .whereType<String>()
+            .toSet()
+            .toList();
+
+        final names = <String, Map<String, dynamic>>{};
+        if (ids.isNotEmpty) {
+          try {
+            final people = await supabase
+                .from('travellers')
+                .select('id, name, profile_pic')
+                .inFilter('id', ids);
+            for (final p in List<Map<String, dynamic>>.from(people)) {
+              names[p['id'].toString()] = p;
+            }
+          } catch (e) {
+            // RLS may hide travellers this viewer has no relationship with.
+            debugPrint('Reviewer lookup limited: $e');
+          }
+        }
+
+        for (final r in withText) {
+          final person = names[r['traveller_id']?.toString()];
+          r['reviewer_name'] = person?['name'] ?? 'Guest';
+          r['reviewer_pic'] = person?['profile_pic'];
+        }
+      }
+      reviews = withText;
 
       // A traveller may rate once their stay has begun, and from then on
       // forever — previously the window closed at checkout, which is exactly
@@ -195,15 +253,17 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
         if (eligibleBookingId != null) {
           final existingRating = await supabase
               .from('ratings')
-              .select('rating')
+              .select('rating, review_text')
               .eq('booking_id', eligibleBookingId!)
               .maybeSingle();
 
           myExistingRating = existingRating != null
               ? (existingRating['rating'] as num).toDouble()
               : null;
+          myExistingReview = existingRating?['review_text']?.toString();
         } else {
           myExistingRating = null;
+          myExistingReview = null;
         }
       }
     } catch (e) {
@@ -211,7 +271,7 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
     }
   }
 
-  Future<void> _submitRating(double selectedRating) async {
+  Future<void> _submitRating(double selectedRating, String reviewText) async {
     setState(() => ratingLoading = true);
     try {
       final user = supabase.auth.currentUser;
@@ -222,6 +282,7 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
         'traveller_id': user.id,
         'booking_id':   eligibleBookingId,
         'rating':       selectedRating,
+        'review_text':  reviewText.trim().isEmpty ? null : reviewText.trim(),
       }, onConflict: 'booking_id');
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -244,6 +305,7 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
 
   void _showRatingDialog() {
     double selectedRating = myExistingRating ?? 0;
+    final reviewCtrl = TextEditingController(text: myExistingReview ?? '');
 
     showDialog(
       context: context,
@@ -293,6 +355,25 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
                         : "${selectedRating.toStringAsFixed(0)} / 5 Stars",
                     style: const TextStyle(color: AppColors.darkTeal, fontWeight: FontWeight.bold, fontSize: 16),
                   ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: reviewCtrl,
+                    maxLines: 4,
+                    maxLength: 600,
+                    textCapitalization: TextCapitalization.sentences,
+                    decoration: InputDecoration(
+                      hintText: 'Tell other guests what the stay was like '
+                          '(optional)',
+                      hintStyle: const TextStyle(fontSize: 13),
+                      filled: true,
+                      fillColor: const Color(0xFFF5F7FA),
+                      contentPadding: const EdgeInsets.all(12),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                  ),
                 ],
               ),
               actions: [
@@ -310,7 +391,7 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
                       ? null
                       : () {
                           Navigator.pop(context);
-                          _submitRating(selectedRating);
+                          _submitRating(selectedRating, reviewCtrl.text);
                         },
                   child: const Text("Submit", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                 ),
@@ -331,6 +412,7 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
     DateTime? rangeStart;
     DateTime? rangeEnd;
     DateTime focusedDay = DateTime.now();
+    int guests = 1;
 
     showModalBottomSheet(
       context: context,
@@ -430,6 +512,44 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
                       ),
                     ),
                     const Divider(height: 30),
+                    // Guest count — the database rejects a booking over the
+                    // listing's max_guests, so this cannot be assumed to be 1.
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text("Guests:",
+                            style: TextStyle(fontSize: 16, color: Colors.black54)),
+                        Row(
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.remove_circle_outline),
+                              color: AppColors.darkTeal,
+                              onPressed: guests > 1
+                                  ? () => setSheetState(() => guests--)
+                                  : null,
+                            ),
+                            Text('$guests',
+                                style: const TextStyle(
+                                    fontSize: 16, fontWeight: FontWeight.bold)),
+                            IconButton(
+                              icon: const Icon(Icons.add_circle_outline),
+                              color: AppColors.darkTeal,
+                              onPressed: guests < maxGuests
+                                  ? () => setSheetState(() => guests++)
+                                  : null,
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        'This place takes up to $maxGuests',
+                        style: const TextStyle(fontSize: 11, color: Colors.black38),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -490,7 +610,8 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
                       text: "Confirm Booking",
                       onPressed: rangeStart == null
                         ? null
-                        : () => confirmBooking(rangeStart!, rangeEnd ?? rangeStart!, totalRent),
+                        : () => confirmBooking(
+                            rangeStart!, rangeEnd ?? rangeStart!, totalRent, guests),
                     ),
                   ],
                 ),
@@ -506,7 +627,8 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
   /// transaction that re-checks availability under a row lock and writes both
   /// notifications. Doing this client-side allowed two travellers to book the
   /// same dates and could leave a booking with no notifications attached.
-  Future<void> confirmBooking(DateTime start, DateTime end, double totalRent) async {
+  Future<void> confirmBooking(
+      DateTime start, DateTime end, double totalRent, int guests) async {
     Navigator.pop(context);
     setState(() => loading = true);
     try {
@@ -514,10 +636,11 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
       if (user == null) throw Exception("Please login as a traveller to book.");
 
       await supabase.rpc('create_booking', params: {
-        'p_property_id': widget.propertyId,
+        'p_property_id': widget.propertyId.toString(),
         'p_start_date': DateFormat('yyyy-MM-dd').format(start),
         'p_end_date': DateFormat('yyyy-MM-dd').format(end),
         'p_total_price': totalRent,
+        'p_guests': guests,
       });
 
       if (!mounted) return;
@@ -783,13 +906,25 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      hostName,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            hostName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.black87,
+                            ),
+                          ),
+                        ),
+                        if (hostVerification == 'verified') ...[
+                          const SizedBox(width: 8),
+                          VerifiedBadge(status: hostVerification),
+                        ],
+                      ],
                     ),
                     const SizedBox(height: 4),
                     Row(
@@ -933,6 +1068,269 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
     );
   }
 
+  // ── Reviews (B5) ─────────────────────────────────────────────────────────
+
+  Future<void> _replyToReview(Map<String, dynamic> review) async {
+    final ctrl = TextEditingController(text: review['host_reply']?.toString());
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Reply to this review',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+        content: TextField(
+          controller: ctrl,
+          maxLines: 4,
+          maxLength: 500,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: InputDecoration(
+            hintText: 'Your reply is public',
+            filled: true,
+            fillColor: const Color(0xFFF5F7FA),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: BorderSide.none,
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.darkTeal,
+              shape:
+                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Post reply',
+                style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (saved != true) return;
+
+    try {
+      await supabase
+          .from('ratings')
+          .update({
+            'host_reply': ctrl.text.trim().isEmpty ? null : ctrl.text.trim(),
+            'host_replied_at': DateTime.now().toUtc().toIso8601String(),
+          })
+          .eq('booking_id', review['booking_id']);
+
+      await _fetchRatings();
+      if (!mounted) return;
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Reply posted'),
+            backgroundColor: AppColors.darkTeal),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not post reply: $e'),
+            backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  Widget _buildReviewsSection() {
+    if (reviews.isEmpty) return const SizedBox.shrink();
+
+    return _detailCard(
+      icon: Icons.reviews_rounded,
+      title: 'Reviews (${reviews.length})',
+      child: Column(
+        children: [
+          for (final r in reviews) _reviewTile(r),
+        ],
+      ),
+    );
+  }
+
+  Widget _reviewTile(Map<String, dynamic> r) {
+    final rating = (r['rating'] as num?)?.toDouble() ?? 0;
+    final text = r['review_text']?.toString() ?? '';
+    final reply = r['host_reply']?.toString();
+    final pic = r['reviewer_pic']?.toString();
+    final created = DateTime.tryParse(r['created_at']?.toString() ?? '');
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade100),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 16,
+                backgroundColor: AppColors.darkTeal.withOpacity(0.08),
+                backgroundImage: (pic != null && pic.isNotEmpty)
+                    ? NetworkImage(pic)
+                    : null,
+                child: (pic == null || pic.isEmpty)
+                    ? const Icon(Icons.person, size: 16, color: AppColors.darkTeal)
+                    : null,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(r['reviewer_name']?.toString() ?? 'Guest',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 13.5)),
+                    if (created != null)
+                      Text(Fmt.date(created),
+                          style: const TextStyle(
+                              fontSize: 10.5, color: Colors.black38)),
+                  ],
+                ),
+              ),
+              Row(
+                children: List.generate(
+                  5,
+                  (i) => Icon(
+                    rating >= i + 1
+                        ? Icons.star_rounded
+                        : Icons.star_border_rounded,
+                    size: 14,
+                    color: rating >= i + 1
+                        ? const Color(0xFFFFB800)
+                        : Colors.grey.shade300,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (text.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text(text,
+                style: const TextStyle(
+                    fontSize: 13.5, height: 1.45, color: Colors.black87)),
+          ],
+          if (reply != null && reply.trim().isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.lightTeal.withOpacity(0.3)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.reply_rounded,
+                          size: 13, color: AppColors.darkTeal),
+                      const SizedBox(width: 6),
+                      Text('Response from $hostName',
+                          style: const TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.darkTeal)),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(reply,
+                      style: const TextStyle(
+                          fontSize: 12.5, height: 1.4, color: Colors.black87)),
+                ],
+              ),
+            ),
+          ],
+          if (isHost) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  visualDensity: VisualDensity.compact,
+                ),
+                icon: const Icon(Icons.reply_rounded, size: 15),
+                label: Text(
+                  (reply == null || reply.trim().isEmpty)
+                      ? 'Reply'
+                      : 'Edit reply',
+                  style: const TextStyle(fontSize: 12),
+                ),
+                onPressed: () => _replyToReview(r),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ── Map (B3) ─────────────────────────────────────────────────────────────
+
+  Widget _buildMapSection() {
+    if (!hasCoordinates) return const SizedBox.shrink();
+    final point = LatLng(latitude!, longitude!);
+
+    return _detailCard(
+      icon: Icons.map_rounded,
+      title: 'Where you will be',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: SizedBox(
+              height: 200,
+              child: FlutterMap(
+                options: MapOptions(
+                  initialCenter: point,
+                  initialZoom: 14,
+                  // Static preview: the surrounding page scrolls instead.
+                  interactionOptions: const InteractionOptions(
+                    flags: InteractiveFlag.pinchZoom | InteractiveFlag.doubleTapZoom,
+                  ),
+                ),
+                children: [
+                  TileLayer(
+                    urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                    userAgentPackageName: 'com.example.surfnstay',
+                  ),
+                  MarkerLayer(markers: [
+                    Marker(
+                      point: point,
+                      width: 44,
+                      height: 44,
+                      alignment: Alignment.topCenter,
+                      child: const Icon(Icons.location_on,
+                          size: 44, color: AppColors.darkTeal),
+                    ),
+                  ]),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text('© OpenStreetMap contributors',
+              style: TextStyle(fontSize: 9, color: Colors.black38)),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1003,7 +1401,9 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
                     background: Stack(
                       fit: StackFit.expand,
                       children: [
-                        PageView.builder(
+                        Hero(
+                          tag: "property-image-${widget.propertyId}",
+                          child: PageView.builder(
                           controller: _pageController,
                           onPageChanged: (index) {
                             setState(() => _currentImageIndex = index);
@@ -1013,6 +1413,7 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
                             widget.images[index],
                             fit: BoxFit.cover,
                           ),
+                        ),
                         ),
                         // Indicator (Dots in capsule)
                         if (widget.images.length > 1)
@@ -1209,8 +1610,14 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
                         // Section 1: Guest Experience
                         _buildRatingSection(),
 
+                        // Section 1b: Written reviews
+                        _buildReviewsSection(),
+
                         // Section 2: Presented by Host
                         _buildHostSection(),
+
+                        // Section 2b: Map
+                        _buildMapSection(),
 
                         // Section 3: Facilities
                         _detailCard(

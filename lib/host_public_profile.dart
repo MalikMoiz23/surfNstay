@@ -5,7 +5,6 @@ import 'app_theme.dart';
 import 'page_transition.dart';
 import 'RoomDetailPage.dart';
 import 'wishlist_service.dart';
-import 'wishlist_page.dart';
 
 class HostPublicProfilePage extends StatefulWidget {
   final String hostId;
@@ -146,8 +145,14 @@ class _HostPublicProfilePageState extends State<HostPublicProfilePage> {
                             fontWeight: FontWeight.bold,
                           ),
                         ),
-                        const SizedBox(width: 6),
-                        const Icon(Icons.verified, color: Colors.white, size: 20),
+                        // Only shown once an admin has approved the CNIC.
+                        // This used to be unconditional, so every host
+                        // displayed a verified tick they had not earned.
+                        if (hostData!['verification_status'] == 'verified') ...[
+                          const SizedBox(width: 6),
+                          const Icon(Icons.verified,
+                              color: Colors.white, size: 20),
+                        ],
                       ],
                     ),
                     const Text(

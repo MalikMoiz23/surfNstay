@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'RoomDetailPage.dart';
 import 'ai_chatbot_page.dart';
 import 'app_theme.dart';
+import 'formatting.dart';
 import 'messages_page.dart';
 import 'page_transition.dart';
 import 'profile_page.dart';
@@ -54,6 +55,14 @@ class _MyTripsPageState extends State<MyTripsPage>
         return;
       }
 
+      // Move finished stays to 'completed' and retire lapsed holds before
+      // reading, so the tabs reflect the real state.
+      try {
+        await supabase.rpc('refresh_booking_states');
+      } catch (e) {
+        debugPrint('refresh_booking_states unavailable: $e');
+      }
+
       final res = await supabase
           .from('bookings')
           .select('*, properties(*)')
@@ -84,6 +93,7 @@ class _MyTripsPageState extends State<MyTripsPage>
   bool _isUpcoming(Map<String, dynamic> b) {
     final status = b['status'];
     if (status == 'cancelled' || status == 'expired') return false;
+    if (status == 'completed') return false;
     final end = DateTime.parse(b['end_date']);
     return !end.isBefore(_today());
   }
@@ -91,6 +101,7 @@ class _MyTripsPageState extends State<MyTripsPage>
   bool _isPast(Map<String, dynamic> b) {
     final status = b['status'];
     if (status == 'cancelled' || status == 'expired') return false;
+    if (status == 'completed') return true;
     final end = DateTime.parse(b['end_date']);
     return end.isBefore(_today());
   }
@@ -137,7 +148,7 @@ class _MyTripsPageState extends State<MyTripsPage>
 
     try {
       await supabase.rpc('cancel_booking', params: {
-        'p_booking_id': b['id'],
+        'p_booking_id': b['id'].toString(),
       });
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -246,6 +257,12 @@ class _MyTripsPageState extends State<MyTripsPage>
           color: Colors.green.shade700,
           icon: Icons.check_circle_rounded,
           label: 'Confirmed'
+        );
+      case 'checked_in':
+        return (
+          color: AppColors.lightTeal,
+          icon: Icons.meeting_room_rounded,
+          label: 'You are staying here'
         );
       case 'completed':
         return (
@@ -534,12 +551,23 @@ class _MyTripsPageState extends State<MyTripsPage>
                     ],
                   ),
                 ),
-                Text(
-                  'PKR ${(b['total_price'] as num?)?.toStringAsFixed(0) ?? '—'}',
-                  style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.darkTeal),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      b['total_price'] == null
+                          ? '—'
+                          : Fmt.money(b['total_price'] as num),
+                      style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.darkTeal),
+                    ),
+                    if (b['guests'] != null)
+                      Text(Fmt.guests((b['guests'] as num).toInt()),
+                          style: const TextStyle(
+                              fontSize: 10.5, color: textLight)),
+                  ],
                 ),
               ],
             ),

@@ -1,5 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'animations.dart';
+import 'formatting.dart';
+import 'search_filters.dart';
 import 'wishlist_page.dart';
 import 'my_trips_page.dart';
 import 'profile_page.dart';
@@ -25,7 +30,6 @@ class _TravellerDashboardState extends State<TravellerDashboard> {
   bool loading = true;
   List<Map<String, dynamic>> rooms = [];
 
-  static const Color primary = Color(0xFF0F4C5C);
   static const Color bg = Color(0xFFF8FAFC); // Pop white cards on soft light background
   static const Color textLight = Color(0xFF64748B);
 
@@ -33,10 +37,56 @@ class _TravellerDashboardState extends State<TravellerDashboard> {
   String _selectedCategory = "All"; // All, Rooms, Apartments, Houses, Villas
   final TextEditingController _searchCtrl = TextEditingController();
 
+  /// All filtering now happens in Postgres via search_properties. This holds
+  /// the criteria; `rooms` holds whatever the server sent back.
+  final SearchFilters _filters = SearchFilters();
+  Timer? _debounce;
+
   @override
   void dispose() {
+    _debounce?.cancel();
     _searchCtrl.dispose();
     super.dispose();
+  }
+
+  /// Typing fires a query per keystroke otherwise.
+  void _onQueryChanged(String value) {
+    setState(() => _searchQuery = value);
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 350), () {
+      _filters.query = value;
+      _search();
+    });
+  }
+
+  Future<void> _openFilters() async {
+    final applied = await SearchFilterSheet.show(context, _filters);
+    if (applied == null || !mounted) return;
+    setState(() {
+      _filters
+        ..city = applied.city
+        ..propertyType = applied.propertyType
+        ..minPrice = applied.minPrice
+        ..maxPrice = applied.maxPrice
+        ..guests = applied.guests
+        ..startDate = applied.startDate
+        ..endDate = applied.endDate
+        ..amenities = applied.amenities
+        ..sort = applied.sort
+        ..radiusKm = applied.radiusKm
+        ..latitude = applied.latitude
+        ..longitude = applied.longitude;
+
+      // Keep the category strip in sync with the sheet.
+      _selectedCategory = switch (applied.propertyType) {
+        'Room' => 'Rooms',
+        'Apartment' => 'Apartments',
+        'House' => 'Houses',
+        'Villa' => 'Villas',
+        _ => 'All',
+      };
+    });
+    await _search();
   }
 
   late final Stream<List<Map<String, dynamic>>> _notificationsStream;
@@ -61,124 +111,105 @@ class _TravellerDashboardState extends State<TravellerDashboard> {
       _notificationsStream = const Stream.empty();
       _messagesStream = const Stream.empty();
     }
-    fetchRooms();
+    _search();
   }
 
-  Future<void> fetchRooms() async {
-    setState(() => loading = true);
+  /// One round trip. Text, city, type, price band, guest count, date
+  /// availability, amenities, radius and sort order are all applied in
+  /// Postgres — previously the app pulled every property plus every rating
+  /// row and filtered two fields in Dart.
+  Future<void> _search() async {
+    if (mounted) setState(() => loading = true);
 
     try {
-      // 1. Fetch properties
-      final response = await supabase
-          .from('properties')
-          .select()
-          .order('created_at', ascending: false);
-
-      // 2. Fetch all ratings to calculate average rating
-      final ratingsRes = await supabase
-          .from('ratings')
-          .select('property_id, rating');
-
-      // Create a map of propertyId -> List of ratings
-      Map<String, List<double>> propertyRatings = {};
-      for (var r in ratingsRes) {
-        final pid = r['property_id'].toString();
-        final rate = (r['rating'] as num).toDouble();
-        propertyRatings.putIfAbsent(pid, () => []).add(rate);
+      // Retire lapsed holds and close out finished stays so availability and
+      // the host's earnings figure reflect reality.
+      try {
+        await supabase.rpc('refresh_booking_states');
+      } catch (e) {
+        debugPrint('refresh_booking_states unavailable: $e');
       }
 
-      rooms = response.map<Map<String, dynamic>>((p) {
-        List<String> imgs = [];
+      final response =
+          await supabase.rpc('search_properties', params: _filters.toRpcParams());
 
-        if (p['image1_url'] != null && p['image1_url'] != "") {
-          imgs.add(p['image1_url']);
-        }
-        if (p['image2_url'] != null && p['image2_url'] != "") {
-          imgs.add(p['image2_url']);
-        }
-        if (p['image3_url'] != null && p['image3_url'] != "") {
-          imgs.add(p['image3_url']);
-        }
+      final list = List<Map<String, dynamic>>.from(response as List);
 
-        final pid = p['id'].toString();
-        final rates = propertyRatings[pid] ?? [];
-        double avgRating = 0.0;
-        if (rates.isNotEmpty) {
-          final sum = rates.fold<double>(0.0, (acc, val) => acc + val);
-          avgRating = sum / rates.length;
-        }
+      rooms = list.map<Map<String, dynamic>>((p) {
+        final imgs = <String>[
+          for (final key in ['image1_url', 'image2_url', 'image3_url'])
+            if (p[key] != null && p[key].toString().isNotEmpty)
+              p[key].toString()
+        ];
 
         return {
-          "property_id": pid,
+          "property_id": p['id'].toString(),
           "host_id": p['host_id'],
           "images": imgs,
-          "price_per_night": p['price_per_night'] ?? 0,
+          "price_per_night": (p['price_per_night'] as num?)?.toDouble() ?? 0,
+          "effective_price": (p['effective_price'] as num?)?.toDouble() ?? 0,
+          "discount": (p['discount'] as num?)?.toDouble() ?? 0,
           "location": p['location'] ?? "",
+          "city": p['city'] ?? "",
           "roomName": p['room_name'] ?? "Room",
           "property_type": p['property_type'] ?? 'Room',
           "bedrooms": p['bedrooms'] ?? 1,
           "bathrooms": p['bathrooms'] ?? 1,
           "max_guests": p['max_guests'] ?? 1,
-          "avg_rating": avgRating,
-          "total_reviews": rates.length,
+          "avg_rating": (p['avg_rating'] as num?)?.toDouble() ?? 0.0,
+          "total_reviews": p['total_reviews'] ?? 0,
+          "distance_km": (p['distance_km'] as num?)?.toDouble(),
+          "amenities": List<String>.from(p['amenity_keys'] ?? const []),
+          "host_verified": p['host_verified'] == true,
         };
       }).toList();
 
+      if (!mounted) return;
       setState(() => loading = false);
     } catch (e) {
-      print("Error fetching rooms: $e");
+      debugPrint("Error searching properties: $e");
+      if (!mounted) return;
       setState(() => loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not load stays: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
+  /// Groups whatever the server returned by its own `city` value.
+  ///
+  /// This used to be five hardcoded city names plus an "Other Cities" bucket,
+  /// matched by substring against the free-text address — so a listing in
+  /// Multan or Skardu was permanently filed under "Other".
+  ///
+  /// When the results are sorted (price, rating, distance) grouping would
+  /// scramble that order, so in those modes everything stays in one list.
   Map<String, List<Map<String, dynamic>>> groupRooms() {
-    // 1. Filter by category
-    Iterable<Map<String, dynamic>> tempRooms = rooms;
-    if (_selectedCategory != "All") {
-      String mappedType = "Room";
-      if (_selectedCategory == "Apartments") mappedType = "Apartment";
-      if (_selectedCategory == "Houses") mappedType = "House";
-      if (_selectedCategory == "Villas") mappedType = "Villa";
-
-      tempRooms = tempRooms.where((r) => r["property_type"] == mappedType);
+    if (_filters.sort != 'recent') {
+      return {'Results': List<Map<String, dynamic>>.from(rooms)};
     }
 
-    // 2. Filter by search query
-    final query = _searchQuery.toLowerCase().trim();
-    final filtered = query.isEmpty
-        ? tempRooms.toList()
-        : tempRooms.where((r) {
-            final loc  = r["location"].toString().toLowerCase();
-            final name = r["roomName"].toString().toLowerCase();
-            return loc.contains(query) || name.contains(query);
-          }).toList();
-
-    Map<String, List<Map<String, dynamic>>> grouped = {
-      "Islamabad": [],
-      "Karachi": [],
-      "Lahore": [],
-      "Taxila": [],
-      "Wah": [],
-      "Other Cities": []
-    };
-
-    for (var room in filtered) {
-      String loc = room["location"].toString().toLowerCase();
-      if (loc.contains("islamabad")) {
-        grouped["Islamabad"]!.add(room);
-      } else if (loc.contains("karachi")) {
-        grouped["Karachi"]!.add(room);
-      } else if (loc.contains("lahore")) {
-        grouped["Lahore"]!.add(room);
-      } else if (loc.contains("taxila")) {
-        grouped["Taxila"]!.add(room);
-      } else if (loc.contains("wah")) {
-        grouped["Wah"]!.add(room);
-      } else {
-        grouped["Other Cities"]!.add(room);
+    final grouped = <String, List<Map<String, dynamic>>>{};
+    for (final room in rooms) {
+      var city = (room['city'] ?? '').toString().trim();
+      if (city.isEmpty) {
+        city = (room['location'] ?? '').toString().split(',').first.trim();
       }
+      if (city.isEmpty) city = 'Other';
+      grouped.putIfAbsent(city, () => []).add(room);
     }
-    return grouped;
+
+    // Busiest cities first, then alphabetically for a stable order.
+    final ordered = grouped.keys.toList()
+      ..sort((a, b) {
+        final byCount = grouped[b]!.length.compareTo(grouped[a]!.length);
+        return byCount != 0 ? byCount : a.compareTo(b);
+      });
+
+    return {for (final c in ordered) c: grouped[c]!};
   }
 
   void _onNavTap(int index) {
@@ -341,6 +372,106 @@ class _TravellerDashboardState extends State<TravellerDashboard> {
     );
   }
 
+  Widget _buildFilterButton() {
+    final count = _filters.activeCount;
+    return GestureDetector(
+      onTap: _openFilters,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          gradient: count > 0
+              ? const LinearGradient(colors: AppColors.primaryGradient)
+              : null,
+          color: count > 0 ? null : Colors.white,
+          borderRadius: BorderRadius.circular(30),
+          border: Border.all(
+              color: count > 0 ? Colors.transparent : Colors.grey.shade200),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 8,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.tune_rounded,
+                size: 18, color: count > 0 ? Colors.white : AppColors.darkTeal),
+            const SizedBox(width: 6),
+            Text(
+              count > 0 ? 'Filters ($count)' : 'Filters',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                color: count > 0 ? Colors.white : AppColors.darkTeal,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Compact readout of what is currently narrowing the results, so a user
+  /// staring at three listings knows why.
+  Widget _buildActiveFilterSummary() {
+    if (_filters.activeCount == 0) return const SizedBox.shrink();
+
+    final bits = <String>[];
+    if (_filters.startDate != null && _filters.endDate != null) {
+      bits.add(Fmt.dateRange(_filters.startDate!, _filters.endDate!));
+    }
+    if (_filters.guests != null) bits.add(Fmt.guests(_filters.guests!));
+    if (_filters.minPrice != null || _filters.maxPrice != null) {
+      final lo = _filters.minPrice == null ? '' : Fmt.money(_filters.minPrice);
+      final hi = _filters.maxPrice == null ? '' : Fmt.money(_filters.maxPrice);
+      bits.add(lo.isEmpty
+          ? 'under $hi'
+          : hi.isEmpty
+              ? 'over $lo'
+              : '$lo – $hi');
+    }
+    if (_filters.amenities.isNotEmpty) {
+      bits.add('${_filters.amenities.length} amenities');
+    }
+    if (_filters.radiusKm != null && _filters.latitude != null) {
+      bits.add('within ${_filters.radiusKm!.toStringAsFixed(0)} km');
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              '${rooms.length} ${rooms.length == 1 ? 'stay' : 'stays'}'
+              '${bits.isEmpty ? '' : ' · ${bits.join(' · ')}'}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 11.5, color: textLight),
+            ),
+          ),
+          GestureDetector(
+            onTap: () {
+              setState(() {
+                _selectedCategory = 'All';
+                _filters.reset();
+              });
+              _search();
+            },
+            child: const Text('Clear',
+                style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.darkTeal)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildCategoryFilterBar() {
     final List<Map<String, dynamic>> categories = [
       {"name": "All", "icon": Icons.explore_outlined},
@@ -358,7 +489,19 @@ class _TravellerDashboardState extends State<TravellerDashboard> {
         children: categories.map((cat) {
           final isSelected = _selectedCategory == cat["name"];
           return GestureDetector(
-            onTap: () => setState(() => _selectedCategory = cat["name"]),
+            onTap: () {
+              setState(() {
+                _selectedCategory = cat["name"];
+                _filters.propertyType = switch (cat["name"]) {
+                  'Rooms' => 'Room',
+                  'Apartments' => 'Apartment',
+                  'Houses' => 'House',
+                  'Villas' => 'Villa',
+                  _ => null,
+                };
+              });
+              _search();
+            },
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
               margin: const EdgeInsets.only(right: 12),
@@ -417,14 +560,7 @@ class _TravellerDashboardState extends State<TravellerDashboard> {
   @override
   Widget build(BuildContext context) {
     final grouped = groupRooms();
-    List<String> cityOrder = [
-      "Islamabad",
-      "Karachi",
-      "Lahore",
-      "Taxila",
-      "Wah",
-      "Other Cities"
-    ];
+    final cityOrder = grouped.keys.toList();
 
     return Scaffold(
       backgroundColor: bg,
@@ -445,9 +581,10 @@ class _TravellerDashboardState extends State<TravellerDashboard> {
         onTap: _onNavTap,
       ),
       body: SafeArea(
-        child: loading
-            ? const Center(child: CircularProgressIndicator(color: AppColors.darkTeal))
-            : Column(
+        // The banner, search box and filters stay mounted while a query runs,
+        // so you can keep typing. Only the results area swaps to skeletons —
+        // the old full-screen spinner blanked the search box mid-search.
+        child: Column(
                 children: [
                   // Top Gradient Banner (SurfNStay + Find a Perfect Stay)
                   _buildTopBanner(),
@@ -468,7 +605,7 @@ class _TravellerDashboardState extends State<TravellerDashboard> {
                     ),
                     child: TextField(
                       controller: _searchCtrl,
-                      onChanged: (val) => setState(() => _searchQuery = val),
+                      onChanged: _onQueryChanged,
                       decoration: CustomInputDecoration.getDecoration(
                         "Search city or room name...",
                         prefixIcon: Icons.search_rounded,
@@ -478,7 +615,7 @@ class _TravellerDashboardState extends State<TravellerDashboard> {
                                 icon: const Icon(Icons.clear, color: Colors.grey),
                                 onPressed: () {
                                   _searchCtrl.clear();
-                                  setState(() => _searchQuery = "");
+                                  _onQueryChanged("");
                                 },
                               )
                             : null,
@@ -486,14 +623,25 @@ class _TravellerDashboardState extends State<TravellerDashboard> {
                     ),
                   ),
 
-                  // Category Filter Bar
-                  _buildCategoryFilterBar(),
+                  // Category strip + filters entry point
+                  Row(
+                    children: [
+                      Expanded(child: _buildCategoryFilterBar()),
+                      _buildFilterButton(),
+                      const SizedBox(width: 12),
+                    ],
+                  ),
+
+                  _buildActiveFilterSummary(),
 
                   // Room List / Sections
                   Expanded(
-                    child: () {
+                    child: loading
+                        ? _buildResultsSkeleton()
+                        : () {
                       final hasAnyRooms = cityOrder.any((c) => grouped[c]!.isNotEmpty);
                       if (!hasAnyRooms) {
+                        final filtered = _filters.activeCount > 0;
                         return Center(
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
@@ -503,17 +651,26 @@ class _TravellerDashboardState extends State<TravellerDashboard> {
                               Text(
                                 _searchQuery.isNotEmpty
                                     ? 'No results for "$_searchQuery"'
-                                    : 'No stays available in this category',
+                                    : filtered
+                                        ? 'No stays match these filters'
+                                        : 'No stays available yet',
                                 style: const TextStyle(fontSize: 16, color: Colors.grey, fontWeight: FontWeight.bold),
                               ),
-                              if (_searchQuery.isNotEmpty) ...[
+                              if (_searchQuery.isNotEmpty || filtered) ...[
                                 const SizedBox(height: 8),
                                 TextButton(
                                   onPressed: () {
                                     _searchCtrl.clear();
-                                    setState(() => _searchQuery = "");
+                                    setState(() {
+                                      _searchQuery = "";
+                                      _selectedCategory = "All";
+                                      _filters
+                                        ..query = ""
+                                        ..reset();
+                                    });
+                                    _search();
                                   },
-                                  child: const Text("Clear search", style: TextStyle(color: AppColors.darkTeal, fontWeight: FontWeight.bold)),
+                                  child: const Text("Clear all filters", style: TextStyle(color: AppColors.darkTeal, fontWeight: FontWeight.bold)),
                                 ),
                               ],
                             ],
@@ -578,7 +735,10 @@ class _TravellerDashboardState extends State<TravellerDashboard> {
                                           return Container(
                                             width: MediaQuery.of(context).size.width * 0.46,
                                             margin: const EdgeInsets.only(right: 16, bottom: 8),
-                                            child: _roomCard(cityRooms[index]),
+                                            child: FadeSlideIn(
+                                              index: index,
+                                              child: _roomCard(cityRooms[index]),
+                                            ),
                                           );
                                         },
                                       ),
@@ -593,7 +753,10 @@ class _TravellerDashboardState extends State<TravellerDashboard> {
                                         mainAxisSpacing: 16,
                                         childAspectRatio: 0.76,
                                       ),
-                                      itemBuilder: (context, index) => _roomCard(cityRooms[index]),
+                                      itemBuilder: (context, index) => FadeSlideIn(
+                                        index: index,
+                                        child: _roomCard(cityRooms[index]),
+                                      ),
                                     ),
                               const SizedBox(height: 12),
                             ],
@@ -608,6 +771,29 @@ class _TravellerDashboardState extends State<TravellerDashboard> {
     );
   }
 
+
+  /// Placeholder grid shown while a search runs. Mirrors the real card shape so
+  /// the layout does not jump when results arrive.
+  Widget _buildResultsSkeleton() {
+    return ListView(
+      physics: const NeverScrollableScrollPhysics(),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      children: [
+        const Shimmer(height: 20, width: 130, radius: 6),
+        const SizedBox(height: 14),
+        GridView.count(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          crossAxisCount: 2,
+          crossAxisSpacing: 16,
+          mainAxisSpacing: 16,
+          childAspectRatio: 0.76,
+          children: List.generate(4, (_) => const Shimmer(height: 220, radius: 22)),
+        ),
+      ],
+    );
+  }
+
   Widget _roomCard(Map<String, dynamic> room) {
     List images = room["images"];
     String price = room["price_per_night"].toString();
@@ -617,6 +803,13 @@ class _TravellerDashboardState extends State<TravellerDashboard> {
     int beds = room["bedrooms"] ?? 1;
     int baths = room["bathrooms"] ?? 1;
     double avgRating = room["avg_rating"] ?? 0.0;
+
+    final double listPrice = (room["price_per_night"] as num?)?.toDouble() ?? 0;
+    final double effPrice =
+        (room["effective_price"] as num?)?.toDouble() ?? listPrice;
+    final double discount = (room["discount"] as num?)?.toDouble() ?? 0;
+    final double? distanceKm = room["distance_km"] as double?;
+    final bool hostVerified = room["host_verified"] == true;
 
     String propertyId = room["property_id"].toString();
     String hostId = room["host_id"].toString();
@@ -667,10 +860,13 @@ class _TravellerDashboardState extends State<TravellerDashboard> {
                               color: Colors.grey[200],
                               child: const Icon(Icons.broken_image, size: 40, color: Colors.black38),
                             )
-                          : Image.network(
-                              images[0],
-                              width: double.infinity,
-                              fit: BoxFit.cover,
+                          : Hero(
+                              tag: "property-image-",
+                              child: Image.network(
+                                images[0],
+                                width: double.infinity,
+                                fit: BoxFit.cover,
+                              ),
                             ),
                     ),
                     Padding(
@@ -688,16 +884,27 @@ class _TravellerDashboardState extends State<TravellerDashboard> {
                             ),
                           ),
                           const SizedBox(height: 4),
-                          // Title
-                          Text(
-                            roomName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
-                              color: Colors.black87,
-                            ),
+                          // Title, with the host verification tick beside it
+                          Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  roomName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                              ),
+                              if (hostVerified) ...[
+                                const SizedBox(width: 5),
+                                const VerifiedBadge(
+                                    status: 'verified', compact: true),
+                              ],
+                            ],
                           ),
                           const SizedBox(height: 4),
                           // Location
@@ -718,18 +925,51 @@ class _TravellerDashboardState extends State<TravellerDashboard> {
                               ),
                             ],
                           ),
+                          if (distanceKm != null) ...[
+                            const SizedBox(height: 3),
+                            Row(
+                              children: [
+                                const Icon(Icons.near_me_outlined,
+                                    size: 11, color: AppColors.darkTeal),
+                                const SizedBox(width: 4),
+                                Text(
+                                  Fmt.distance(distanceKm),
+                                  style: const TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.darkTeal,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                           const SizedBox(height: 8),
-                          // Price
+                          // Price — struck-through original when discounted
                           Row(
                             crossAxisAlignment: CrossAxisAlignment.baseline,
                             textBaseline: TextBaseline.alphabetic,
                             children: [
-                              Text(
-                                "PKR $price",
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 14,
-                                  color: AppColors.darkTeal,
+                              if (discount > 0) ...[
+                                Text(
+                                  Fmt.money(listPrice),
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    color: Colors.black38,
+                                    decoration: TextDecoration.lineThrough,
+                                  ),
+                                ),
+                                const SizedBox(width: 5),
+                              ],
+                              Flexible(
+                                child: Text(
+                                  Fmt.money(effPrice),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 14,
+                                    color: AppColors.darkTeal,
+                                  ),
                                 ),
                               ),
                               const Text(

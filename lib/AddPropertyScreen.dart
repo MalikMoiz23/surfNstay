@@ -3,7 +3,9 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'amenities.dart';
 import 'app_theme.dart';
+import 'location_picker_page.dart';
 import 'page_transition.dart';
 
 class AddPropertyScreen extends StatefulWidget {
@@ -49,7 +51,75 @@ class _AddPropertyScreenState extends State<AddPropertyScreen> {
   List<bool>  _checking = [false, false, false];
   List<bool?>  _aiFlags  = [null, null, null];
 
+  // ── Map coordinates (B3) ────────────────────────────────────────────────
+  double? _latitude;
+  double? _longitude;
+  String  _city = '';
+
+  // ── Structured amenities (B4) ───────────────────────────────────────────
+  List<Amenity> _amenityCatalog = const [];
+  final Set<String> _selectedAmenities = {};
+
+  // ── Stay rules (B6/B7) ──────────────────────────────────────────────────
+  final TextEditingController minNightsCtrl = TextEditingController(text: '1');
+  final TextEditingController maxNightsCtrl = TextEditingController();
+  String _cancellationPolicy = 'moderate';
+
+  static const Map<String, String> _policyBlurb = {
+    'flexible': 'Guests can cancel up to 24 hours before check-in.',
+    'moderate': 'Guests can cancel up to 5 days before check-in.',
+    'strict':   'Guests can cancel up to 14 days before check-in.',
+  };
+
   bool loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    AmenityCatalog.load().then((list) {
+      if (mounted) setState(() => _amenityCatalog = list);
+    });
+  }
+
+  @override
+  void dispose() {
+    roomNameCtrl.dispose();
+    rentCtrl.dispose();
+    discountCtrl.dispose();
+    locationCtrl.dispose();
+    facilitiesCtrl.dispose();
+    descriptionCtrl.dispose();
+    bedroomsCtrl.dispose();
+    bathroomsCtrl.dispose();
+    maxGuestsCtrl.dispose();
+    minNightsCtrl.dispose();
+    maxNightsCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickOnMap() async {
+    final picked = await Navigator.push<PickedLocation>(
+      context,
+      CustomPageRoute(
+        child: LocationPickerPage(
+          initialLatitude: _latitude,
+          initialLongitude: _longitude,
+          initialAddress: locationCtrl.text.trim(),
+        ),
+      ),
+    );
+    if (picked == null || !mounted) return;
+
+    setState(() {
+      _latitude = picked.latitude;
+      _longitude = picked.longitude;
+      if (picked.city.isNotEmpty) _city = picked.city;
+      // Only overwrite the typed address if the host had not written one.
+      if (locationCtrl.text.trim().isEmpty && picked.address.isNotEmpty) {
+        locationCtrl.text = picked.address;
+      }
+    });
+  }
 
   final supabase = Supabase.instance.client;
   final picker   = ImagePicker();
@@ -134,6 +204,21 @@ class _AddPropertyScreenState extends State<AddPropertyScreen> {
       _showMessage('Rent and location are required');
       return;
     }
+    if (_latitude == null || _longitude == null) {
+      _showMessage('Pin your property on the map so guests can find it');
+      return;
+    }
+
+    final minNights = int.tryParse(minNightsCtrl.text.trim()) ?? 1;
+    final maxNights = int.tryParse(maxNightsCtrl.text.trim());
+    if (minNights < 1) {
+      _showMessage('Minimum stay must be at least 1 night');
+      return;
+    }
+    if (maxNights != null && maxNights < minNights) {
+      _showMessage('Maximum stay cannot be shorter than the minimum stay');
+      return;
+    }
     for (int i = 0; i < images.length; i++) {
       if (images[i] != null && _aiFlags[i] == true) {
         _showMessage(
@@ -163,7 +248,7 @@ class _AddPropertyScreenState extends State<AddPropertyScreen> {
         }
       }
 
-      await supabase.from('properties').insert({
+      final inserted = await supabase.from('properties').insert({
         'room_name':         roomNameCtrl.text.trim(),
         'image1_url':        imageUrls[0],
         'image2_url':        imageUrls[1],
@@ -171,6 +256,9 @@ class _AddPropertyScreenState extends State<AddPropertyScreen> {
         'price_per_night':   double.tryParse(rentCtrl.text),
         'discount':          double.tryParse(discountCtrl.text) ?? 0,
         'location':          locationCtrl.text.trim(),
+        'city':              _city.isEmpty ? null : _city,
+        'latitude':          _latitude,
+        'longitude':         _longitude,
         'facilities':        facilitiesCtrl.text.trim(),
         'description':       descriptionCtrl.text.trim(),
         'property_type':     _propertyType,
@@ -178,9 +266,19 @@ class _AddPropertyScreenState extends State<AddPropertyScreen> {
         'bedrooms':          int.tryParse(bedroomsCtrl.text) ?? 1,
         'bathrooms':         int.tryParse(bathroomsCtrl.text) ?? 1,
         'max_guests':        int.tryParse(maxGuestsCtrl.text) ?? 1,
+        'min_nights':        minNights,
+        'max_nights':        maxNights,
+        'cancellation_policy': _cancellationPolicy,
         'host_id':           supabase.auth.currentUser!.id,
         'created_at':        DateTime.now().toIso8601String(),
-      });
+      }).select('id').single();
+
+      if (_selectedAmenities.isNotEmpty) {
+        await supabase.from('property_amenities').insert([
+          for (final key in _selectedAmenities)
+            {'property_id': inserted['id'], 'amenity_key': key}
+        ]);
+      }
 
       setState(() => loading = false);
       _showMessage('Your property is now live! 🎉', success: true);
@@ -188,6 +286,132 @@ class _AddPropertyScreenState extends State<AddPropertyScreen> {
       setState(() => loading = false);
       _showMessage('Failed to add property: $e');
     }
+  }
+
+  // ── Map pin & amenity widgets ────────────────────────────────────────────
+
+  Widget _mapPinTile() {
+    final pinned = _latitude != null && _longitude != null;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: pinned ? const Color(0xFFF1F8F4) : const Color(0xFFFFF4F4),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: pinned ? Colors.green.shade100 : Colors.red.shade100,
+            ),
+          ),
+          child: Row(children: [
+            Icon(
+              pinned ? Icons.check_circle_rounded : Icons.error_outline_rounded,
+              size: 20,
+              color: pinned ? Colors.green.shade700 : Colors.red.shade600,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    pinned ? 'Location pinned' : 'No location pinned yet',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                      color: pinned ? Colors.green.shade800 : Colors.red.shade700,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    pinned
+                        ? '${_latitude!.toStringAsFixed(5)}, ${_longitude!.toStringAsFixed(5)}'
+                            '${_city.isEmpty ? '' : '  ·  $_city'}'
+                        : 'Guests cannot find this listing by distance without it.',
+                    style: const TextStyle(fontSize: 11, color: Colors.black54),
+                  ),
+                ],
+              ),
+            ),
+          ]),
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.darkTeal,
+              side: const BorderSide(color: AppColors.lightTeal),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
+            ),
+            icon: const Icon(Icons.add_location_alt_rounded, size: 18),
+            label: Text(pinned ? 'Change location' : 'Pin on map'),
+            onPressed: _pickOnMap,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _amenityGrid() {
+    if (_amenityCatalog.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: Text('Loading amenities…',
+            style: TextStyle(fontSize: 12, color: Colors.black45)),
+      );
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: _amenityCatalog.map((a) {
+        final selected = _selectedAmenities.contains(a.key);
+        return GestureDetector(
+          onTap: () => setState(() {
+            selected
+                ? _selectedAmenities.remove(a.key)
+                : _selectedAmenities.add(a.key);
+          }),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(
+              gradient: selected
+                  ? const LinearGradient(colors: AppColors.primaryGradient)
+                  : null,
+              color: selected ? null : const Color(0xFFF5F7FA),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: selected ? Colors.transparent : Colors.grey.shade200,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(a.iconData,
+                    size: 15,
+                    color: selected ? Colors.white : AppColors.darkTeal),
+                const SizedBox(width: 7),
+                Text(
+                  a.label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: selected ? Colors.white : Colors.black87,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
+    );
   }
 
   // ── Dialogs & Snackbars ──────────────────────────────────────────────────
@@ -495,6 +719,67 @@ class _AddPropertyScreenState extends State<AddPropertyScreen> {
                           icon: Icons.description_rounded,
                           maxLines: 4,
                           bottomPad: 0),
+                    ]),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // ── Section: Map pin ─────────────────────────────────────
+                  _sectionCard(
+                    icon: Icons.map_rounded,
+                    title: 'Map Location',
+                    subtitle: 'Required — guests search by distance',
+                    child: _mapPinTile(),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // ── Section: Amenities ───────────────────────────────────
+                  _sectionCard(
+                    icon: Icons.checklist_rounded,
+                    title: 'Amenities',
+                    subtitle: 'Guests filter on these, so pick carefully',
+                    child: _amenityGrid(),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // ── Section: Stay rules ──────────────────────────────────
+                  _sectionCard(
+                    icon: Icons.rule_rounded,
+                    title: 'Stay Rules',
+                    subtitle: 'Length of stay and cancellation terms',
+                    child: Column(children: [
+                      Row(children: [
+                        Expanded(
+                            child: _compactField('Min Nights', minNightsCtrl,
+                                Icons.nights_stay_rounded)),
+                        const SizedBox(width: 12),
+                        Expanded(
+                            child: _compactField('Max Nights', maxNightsCtrl,
+                                Icons.event_busy_rounded)),
+                      ]),
+                      const SizedBox(height: 16),
+                      _chipSelector(
+                        items: const ['flexible', 'moderate', 'strict'],
+                        icons: const {
+                          'flexible': Icons.sentiment_satisfied_rounded,
+                          'moderate': Icons.balance_rounded,
+                          'strict': Icons.gavel_rounded,
+                        },
+                        selected: _cancellationPolicy,
+                        onSelect: (v) =>
+                            setState(() => _cancellationPolicy = v),
+                      ),
+                      const SizedBox(height: 10),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          _policyBlurb[_cancellationPolicy] ?? '',
+                          style: const TextStyle(
+                              fontSize: 12, color: Colors.black54),
+                        ),
+                      ),
                     ]),
                   ),
 

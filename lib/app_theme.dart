@@ -124,3 +124,57 @@ class CustomInputDecoration {
     );
   }
 }
+
+/// Shown next to a host's name once an admin has approved their CNIC.
+///
+/// This is the visible payoff for the verification flow — without it the whole
+/// review queue produces nothing a guest can actually see.
+class VerifiedBadge extends StatelessWidget {
+  /// Value of `hosts.verification_status`.
+  final String? status;
+
+  /// Compact form for cards and list tiles: icon only, no label.
+  final bool compact;
+
+  const VerifiedBadge({super.key, required this.status, this.compact = false});
+
+  bool get _isVerified => status == 'verified';
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_isVerified) return const SizedBox.shrink();
+
+    const green = Color(0xFF15803D);
+
+    if (compact) {
+      return const Tooltip(
+        message: 'Identity verified',
+        child: Icon(Icons.verified_rounded, size: 15, color: green),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: green.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: green.withValues(alpha: 0.22)),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.verified_rounded, size: 13, color: green),
+          SizedBox(width: 5),
+          Text(
+            'Verified',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              color: green,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

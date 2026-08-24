@@ -26,6 +26,12 @@ class _HostProfilePageState extends State<HostProfilePage> {
   String? profileImage;
   bool loadingProfile = true;
 
+  /// CNIC verification (B8). The host signup screen had dead CNIC upload code
+  /// commented out; this is the working version, gated by admin review.
+  String verificationStatus = 'unverified';
+  String? verificationNote;
+  bool uploadingCnic = false;
+
   static const Color primary = AppColors.darkTeal;
   static const Color bg = Color(0xFFFFFFFF);
   static const Color textDark = Color(0xFF1E293B);
@@ -45,7 +51,7 @@ class _HostProfilePageState extends State<HostProfilePage> {
 
       final data = await supabase
           .from('hosts')
-          .select('fullName, profile_pic')
+          .select('fullName, profile_pic, verification_status, verification_note')
           .eq('id', user.id)
           .maybeSingle();
 
@@ -53,6 +59,8 @@ class _HostProfilePageState extends State<HostProfilePage> {
         setState(() {
           hostName = data['fullName'] ?? "Host";
           profileImage = data['profile_pic'];
+          verificationStatus = data['verification_status'] ?? 'unverified';
+          verificationNote = data['verification_note'];
           loadingProfile = false;
         });
       } else {
@@ -104,6 +112,192 @@ class _HostProfilePageState extends State<HostProfilePage> {
         SnackBar(content: Text("Failed to upload image: $e")),
       );
     }
+  }
+
+  // ── CNIC verification (B8) ───────────────────────────────────────────────
+
+  Future<void> _submitCnic() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(
+        source: ImageSource.gallery, imageQuality: 85);
+    if (picked == null) return;
+
+    final numberCtrl = TextEditingController();
+    final proceed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Submit for verification'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Your CNIC is reviewed by an admin and is never shown to guests. '
+              'Verified hosts get a badge on all their listings.',
+              style: TextStyle(fontSize: 12.5, color: Colors.black54),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: numberCtrl,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: 'CNIC number (optional)',
+                hintText: '35202-1234567-8',
+                filled: true,
+                fillColor: const Color(0xFFF5F7FA),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.darkTeal,
+              shape:
+                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Submit', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (proceed != true) return;
+
+    setState(() => uploadingCnic = true);
+    try {
+      final user = supabase.auth.currentUser!;
+      final bytes = await File(picked.path).readAsBytes();
+      final fileName =
+          'cnic_${user.id}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+      await supabase.storage.from('host_cnic').uploadBinary(fileName, bytes);
+
+      // Store the object PATH, not a public URL. `host_cnic` must be a
+      // private bucket — a CNIC behind a public link is readable by anyone
+      // who ever sees that link. Admins view it via a short-lived signed URL.
+      await supabase.rpc('submit_host_verification', params: {
+        'p_cnic_url': fileName,
+        'p_cnic_number':
+            numberCtrl.text.trim().isEmpty ? null : numberCtrl.text.trim(),
+      });
+
+      if (!mounted) return;
+      setState(() {
+        verificationStatus = 'pending';
+        verificationNote = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Submitted. An admin will review it shortly.'),
+          backgroundColor: AppColors.darkTeal,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Upload failed: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => uploadingCnic = false);
+    }
+  }
+
+  Widget _verificationCard() {
+    final (Color color, IconData icon, String title, String body) info =
+        switch (verificationStatus) {
+      'verified' => (
+          Colors.green,
+          Icons.verified_rounded,
+          'Verified host',
+          'Your identity has been confirmed. Guests see a Verified badge.'
+        ),
+      'pending' => (
+          Colors.orange,
+          Icons.hourglass_top_rounded,
+          'Verification pending',
+          'An admin is reviewing your CNIC. This usually takes a day.'
+        ),
+      'rejected' => (
+          Colors.red,
+          Icons.gpp_bad_rounded,
+          'Verification rejected',
+          verificationNote?.trim().isNotEmpty == true
+              ? verificationNote!
+              : 'Please upload a clearer photo of your CNIC and try again.'
+        ),
+      _ => (
+          AppColors.darkTeal,
+          Icons.badge_outlined,
+          'Get verified',
+          'Verified hosts get more bookings. Upload your CNIC for a one-time '
+              'admin review — guests never see it.'
+        ),
+    };
+
+    final canSubmit =
+        verificationStatus == 'unverified' || verificationStatus == 'rejected';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: info.$1.withValues(alpha: 0.25)),
+        boxShadow: [
+          BoxShadow(
+            color: primary.withValues(alpha: 0.08),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(info.$2, color: info.$1, size: 22),
+              const SizedBox(width: 10),
+              Text(info.$3,
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                      color: info.$1)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(info.$4,
+              style: const TextStyle(fontSize: 12.5, color: Colors.black54)),
+          if (canSubmit) ...[
+            const SizedBox(height: 14),
+            GradientButton(
+              height: 44,
+              text: verificationStatus == 'rejected'
+                  ? 'Resubmit CNIC'
+                  : 'Upload CNIC',
+              icon: Icons.upload_file_rounded,
+              loading: uploadingCnic,
+              onPressed: uploadingCnic ? null : _submitCnic,
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   void _onNavTap(int index) {
@@ -238,6 +432,8 @@ class _HostProfilePageState extends State<HostProfilePage> {
                       ),
                     ),
                     const SizedBox(height: 26),
+
+                    _verificationCard(),
 
                     _actionTile(
                       icon: Icons.person_search_outlined,

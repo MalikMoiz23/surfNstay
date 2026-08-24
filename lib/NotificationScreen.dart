@@ -1,9 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'ReportRoomScreen.dart';
 import 'booking_service.dart'; // ✅ added
-import 'app_theme.dart';      // ✅ added
 import 'traveller_public_profile.dart'; // ✅ added
 import 'RoomDetailPage.dart';  // ✅ added
 import 'page_transition.dart'; // ✅ added
@@ -21,10 +22,31 @@ class _NotificationScreenState extends State<NotificationScreen> {
   List<Map<String, dynamic>> notifications = [];
   bool loading = true;
 
+  /// Realtime cannot carry the booking/property embed this screen needs, so
+  /// the subscription is used purely as a signal to re-run the real query.
+  StreamSubscription<List<Map<String, dynamic>>>? _liveSub;
+
   @override
   void initState() {
     super.initState();
     fetchNotifications();
+
+    final user = supabase.auth.currentUser;
+    if (user != null) {
+      _liveSub = supabase
+          .from('notifications')
+          .stream(primaryKey: ['id'])
+          .eq('user_id', user.id)
+          .listen((_) {
+        if (mounted && !loading) fetchNotifications();
+      }, onError: (e) => debugPrint('Notification stream error: $e'));
+    }
+  }
+
+  @override
+  void dispose() {
+    _liveSub?.cancel();
+    super.dispose();
   }
 
   Future<void> fetchNotifications() async {
@@ -41,28 +63,57 @@ class _NotificationScreenState extends State<NotificationScreen> {
           .eq('user_id', user.id)
           .order('created_at', ascending: false);
 
+      if (!mounted) return;
       setState(() {
         notifications = List<Map<String, dynamic>>.from(response);
-                loading = false;
+        loading = false;
       });
 
-      // Special handling: Don't mark 'booking_request' as read automatically ONLY if they need an action?
-      // Actually, standard is to mark all as read. But for actionable ones, they remain visible.
+      // Deliberately NOT marking everything read here. Opening the screen used
+      // to wipe every unread flag, including booking requests the host had not
+      // acted on yet, so the badge cleared while the work remained.
+    } catch (e) {
+      debugPrint("Error fetching notifications: $e");
+      if (!mounted) return;
+      setState(() => loading = false);
+    }
+  }
 
-      // Mark as read after fetching
+  /// Marks one notification read without disturbing the rest.
+  Future<void> _markRead(Map<String, dynamic> notif) async {
+    if (notif['is_read'] == true) return;
+    setState(() => notif['is_read'] = true);
+    try {
+      await supabase
+          .from('notifications')
+          .update({'is_read': true}).eq('id', notif['id']);
+    } catch (e) {
+      debugPrint('Could not mark read: $e');
+      if (mounted) setState(() => notif['is_read'] = false);
+    }
+  }
+
+  Future<void> _markAllRead() async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+    try {
       await supabase
           .from('notifications')
           .update({'is_read': true})
           .eq('user_id', user.id)
           .eq('is_read', false);
-          
+      await fetchNotifications();
     } catch (e) {
-      print("Error fetching notifications: $e");
-      setState(() => loading = false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not update: $e'),
+            backgroundColor: Colors.red),
+      );
     }
   }
 
   Future<void> _handleNotificationTap(Map<String, dynamic> notif) async {
+    await _markRead(notif);
     final bookingId = notif['booking_id'];
     if (bookingId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -244,8 +295,10 @@ class _NotificationScreenState extends State<NotificationScreen> {
   Future<void> _processBooking(Map<String, dynamic> notif, bool accepted) async {
     setState(() => loading = true);
     try {
-      final String bookingId = notif['booking_id'];
-      final String notifId = notif['id'];
+      // The RPCs take text ids so they work regardless of the underlying
+      // column type, so coerce here rather than assuming these are strings.
+      final String bookingId = notif['booking_id'].toString();
+      final String notifId = notif['id'].toString();
 
       if (accepted) {
         await BookingService.acceptBooking(bookingId, notifId);
@@ -277,6 +330,16 @@ class _NotificationScreenState extends State<NotificationScreen> {
         title: const Text("Notifications"),
         backgroundColor: const Color(0xFF0F4C5C),
         foregroundColor: Colors.white,
+        actions: [
+          if (notifications.any((n) => n['is_read'] != true))
+            TextButton.icon(
+              icon: const Icon(Icons.done_all_rounded,
+                  size: 18, color: Colors.white),
+              label: const Text('Mark all read',
+                  style: TextStyle(color: Colors.white, fontSize: 12.5)),
+              onPressed: _markAllRead,
+            ),
+        ],
       ),
       backgroundColor: const Color(0xFFF7F9FB),
       body: loading 

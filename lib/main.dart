@@ -6,7 +6,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // The anon key is intended to ship in the client. It is only safe because
-  // Row Level Security restricts what it can reach — see sql/001_plan_a.sql.
+  // Row Level Security restricts what it can reach — see sql/surfnstay_setup.sql.
   await Supabase.initialize(
     url: 'https://unxqxwmmbzyjwmavmvyz.supabase.co',
     anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVueHF4d21tYnp5andtYXZtdnl6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI3ODY4NTEsImV4cCI6MjA4ODM2Mjg1MX0.VoMox07mbUxAu5ysqLvzxM4Ilk6wlYV2qZPkelaQtg4',

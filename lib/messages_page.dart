@@ -85,7 +85,7 @@ class _MessagesPageState extends State<MessagesPage> {
       // This previously subscribed to the whole `chats` table and filtered in
       // Dart, which meant every device received every user's conversation
       // rows. Realtime filters only support a single `eq`, so the OR is
-      // expressed as two streams. RLS (sql/001_plan_a.sql) is the real
+      // expressed as two streams. RLS (sql/surfnstay_setup.sql) is the real
       // boundary; this keeps the client from asking for rows it cannot use.
       _chatsStream = _mergeChatStreams(currentUserId!);
     } else {

@@ -9,6 +9,8 @@ import 'app_theme.dart';
 import 'page_transition.dart';
 import 'package:intl/intl.dart';
 import 'host_profile_page.dart';
+import 'animations.dart';
+import 'manage_availability_page.dart';
 
 class HostDashboard extends StatefulWidget {
   const HostDashboard({super.key});
@@ -27,6 +29,7 @@ class _HostDashboardState extends State<HostDashboard>
 
   String hostName = "Loading...";
   String? profileImage;
+  String? verificationStatus;
 
   // Stats
   int totalBookings = 0;
@@ -90,7 +93,7 @@ class _HostDashboardState extends State<HostDashboard>
       try {
         final response = await supabase
             .from('hosts')
-            .select('fullName, profile_pic')
+.select('fullName, profile_pic, verification_status')
             .eq('id', user.id)
             .maybeSingle();
 
@@ -98,6 +101,7 @@ class _HostDashboardState extends State<HostDashboard>
           setState(() {
             hostName = response['fullName'] ?? "Host";
             profileImage = response['profile_pic'];
+            verificationStatus = response['verification_status']?.toString();
           });
           return;
         }
@@ -128,6 +132,15 @@ class _HostDashboardState extends State<HostDashboard>
     try {
       final user = supabase.auth.currentUser;
       if (user == null) return;
+
+      // Close out stays whose end date has passed before counting earnings.
+      // Nothing used to move a booking to 'completed', so this figure counted
+      // stays that had not happened yet as revenue.
+      try {
+        await supabase.rpc('refresh_booking_states');
+      } catch (e) {
+        debugPrint('refresh_booking_states unavailable: $e');
+      }
 
       // Get all property IDs for this host
       final props = await supabase
@@ -191,8 +204,10 @@ class _HostDashboardState extends State<HostDashboard>
 
         return {
           "id": p['id'].toString(),
+          "room_name": p['room_name'] ?? "Untitled listing",
           "images": imgs,
           "price_per_night": p['price_per_night'],
+          "is_active": p['is_active'] ?? true,
           "facilities": p['facilities'] ?? "",
           "location": p['location'] ?? "",
           "description": p['description'] ?? "",
@@ -227,25 +242,184 @@ class _HostDashboardState extends State<HostDashboard>
     }
   }
 
+
+  // ─────────────────────────────────────
+  //  SKELETON  (replaces a blank spinner)
+  // ─────────────────────────────────────
+  Widget _buildSkeleton() {
+    return ListView(
+      physics: const NeverScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      children: [
+        const Shimmer(height: 108, radius: 24),
+        const SizedBox(height: 18),
+        Row(
+          children: const [
+            Expanded(child: Shimmer(height: 104, radius: 18)),
+            SizedBox(width: 12),
+            Expanded(child: Shimmer(height: 104, radius: 18)),
+            SizedBox(width: 12),
+            Expanded(child: Shimmer(height: 104, radius: 18)),
+          ],
+        ),
+        const SizedBox(height: 28),
+        const Shimmer(height: 22, width: 160, radius: 6),
+        const SizedBox(height: 16),
+        const Shimmer(height: 250, radius: 24),
+        const SizedBox(height: 16),
+        const Shimmer(height: 250, radius: 24),
+      ],
+    );
+  }
+
+  // ─────────────────────────────────────
+  //  VERIFICATION STRIP
+  //  Turns the CNIC flow into something the host is actually prompted to do,
+  //  instead of an option buried in the profile tab.
+  // ─────────────────────────────────────
+  Widget _buildVerificationStrip() {
+    final status = verificationStatus ?? 'unverified';
+    if (status == 'verified') {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFF15803D).withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+                color: const Color(0xFF15803D).withValues(alpha: 0.2)),
+          ),
+          child: Row(
+            children: const [
+              Icon(Icons.verified_rounded, size: 18, color: Color(0xFF15803D)),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Verified host — guests see a badge on your listings.',
+                  style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF15803D)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final pending = status == 'pending';
+    final rejected = status == 'rejected';
+    final accent = pending ? Colors.orange.shade800 : darkTeal;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+      child: PressableScale(
+        onTap: pending
+            ? null
+            : () => Navigator.push(
+                  context,
+                  CustomPageRoute(child: const HostProfilePage()),
+                ),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: accent.withValues(alpha: 0.25)),
+            boxShadow: [
+              BoxShadow(
+                color: accent.withValues(alpha: 0.08),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(9),
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  pending
+                      ? Icons.hourglass_top_rounded
+                      : rejected
+                          ? Icons.gpp_bad_rounded
+                          : Icons.badge_outlined,
+                  size: 20,
+                  color: accent,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      pending
+                          ? 'Verification under review'
+                          : rejected
+                              ? 'Verification was rejected'
+                              : 'Get verified to win more bookings',
+                      style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.bold,
+                          color: accent),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      pending
+                          ? 'An admin is checking your CNIC.'
+                          : 'Upload your CNIC once — guests see a Verified badge.',
+                      style: const TextStyle(
+                          fontSize: 11.5, color: Colors.black54),
+                    ),
+                  ],
+                ),
+              ),
+              if (!pending)
+                const Icon(Icons.chevron_right_rounded, color: textLight),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: bg,
       body: SafeArea(
         child: loading
-            ? const Center(
-                child: CircularProgressIndicator(color: darkTeal),
-              )
-            : CustomScrollView(
-                physics: const BouncingScrollPhysics(),
+            ? _buildSkeleton()
+            : RefreshIndicator(
+                color: darkTeal,
+                onRefresh: () async {
+                  await fetchHostInfo();
+                  await fetchProperties();
+                  await fetchStats();
+                },
+                child: CustomScrollView(
+                physics: const AlwaysScrollableScrollPhysics(
+                    parent: BouncingScrollPhysics()),
                 slivers: [
                   // ── Hero Header ──
-                  SliverToBoxAdapter(child: _buildHeader()),
+                  SliverToBoxAdapter(
+                      child: FadeSlideIn(index: 0, child: _buildHeader())),
+                  // ── Verification prompt ──
+                  SliverToBoxAdapter(
+                      child: FadeSlideIn(index: 1, child: _buildVerificationStrip())),
                   // ── Stats Row ──
-                  SliverToBoxAdapter(child: _buildStatsRow()),
+                  SliverToBoxAdapter(
+                      child: FadeSlideIn(index: 2, child: _buildStatsRow())),
                   // ── Section Title ──
                   SliverToBoxAdapter(
-                    child: Padding(
+                    child: FadeSlideIn(index: 3, child: Padding(
                       padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
                       child: Row(
                         children: [
@@ -289,7 +463,7 @@ class _HostDashboardState extends State<HostDashboard>
                           ),
                         ],
                       ),
-                    ),
+                    )),
                   ),
                   // ── Properties List ──
                   properties.isEmpty
@@ -300,8 +474,10 @@ class _HostDashboardState extends State<HostDashboard>
                           padding: const EdgeInsets.symmetric(horizontal: 20),
                           sliver: SliverList(
                             delegate: SliverChildBuilderDelegate(
-                              (context, index) =>
-                                  _buildPropertyCard(properties[index]),
+                              (context, index) => FadeSlideIn(
+                                index: index + 4,
+                                child: _buildPropertyCard(properties[index]),
+                              ),
                               childCount: properties.length,
                             ),
                           ),
@@ -309,6 +485,7 @@ class _HostDashboardState extends State<HostDashboard>
                   const SliverToBoxAdapter(
                       child: SizedBox(height: 90)),
                 ],
+              ),
               ),
       ),
       floatingActionButton: properties.isNotEmpty
@@ -483,21 +660,22 @@ class _HostDashboardState extends State<HostDashboard>
           _buildStatCard(
             icon: Icons.home_work_rounded,
             label: "Properties",
-            value: properties.length.toString(),
+            count: properties.length,
             color: const Color(0xFF6C63FF),
           ),
           const SizedBox(width: 12),
           _buildStatCard(
             icon: Icons.calendar_today_rounded,
             label: "Bookings",
-            value: totalBookings.toString(),
+            count: totalBookings,
             color: const Color(0xFFFF8A65),
           ),
           const SizedBox(width: 12),
           _buildStatCard(
             icon: Icons.account_balance_wallet_rounded,
             label: "Earnings",
-            value: _formatEarnings(totalEarnings),
+            count: totalEarnings,
+            format: _formatEarnings,
             color: const Color(0xFF4CAF50),
           ),
         ],
@@ -517,8 +695,9 @@ class _HostDashboardState extends State<HostDashboard>
   Widget _buildStatCard({
     required IconData icon,
     required String label,
-    required String value,
+    required num count,
     required Color color,
+    String Function(double)? format,
   }) {
     return Expanded(
       child: Container(
@@ -545,16 +724,16 @@ class _HostDashboardState extends State<HostDashboard>
               child: Icon(icon, color: color, size: 22),
             ),
             const SizedBox(height: 10),
-            Text(
-              value,
-              style: TextStyle(
+            AnimatedCount(
+              value: count,
+              format: format == null
+                  ? null
+                  : (v) => format(v.toDouble()),
+              style: const TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
                 color: textDark,
               ),
-              textAlign: TextAlign.center,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 4),
             Text(
@@ -796,6 +975,39 @@ class _HostDashboardState extends State<HostDashboard>
                   ],
                 ),
                 const SizedBox(height: 14),
+                // Availability — hosts previously had no way to close dates.
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        CustomPageRoute(
+                          child: ManageAvailabilityPage(
+                            propertyId: propertyId,
+                            propertyName:
+                                prop['room_name']?.toString() ?? 'Your listing',
+                          ),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.event_available_rounded,
+                        size: 18, color: lightTeal),
+                    label: const Text(
+                      "Manage availability",
+                      style: TextStyle(
+                          color: darkTeal, fontWeight: FontWeight.w600),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: lightTeal, width: 1.5),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
                 // Action buttons
                 Row(
                   children: [

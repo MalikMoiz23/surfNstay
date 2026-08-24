@@ -24,7 +24,7 @@ class SessionResolver {
     final user = _sb.auth.currentUser;
     if (user == null) return UserRole.none;
 
-    // The admins table only exists after sql/001_plan_a.sql has been applied.
+    // The admins table only exists after sql/surfnstay_setup.sql has been applied.
     // Treat a missing table as "not an admin" so the app still runs before then.
     try {
       final admin = await _sb

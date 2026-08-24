@@ -3,7 +3,9 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'amenities.dart';
 import 'app_theme.dart';
+import 'location_picker_page.dart';
 import 'page_transition.dart';
 
 class EditPropertyScreen extends StatefulWidget {
@@ -22,6 +24,25 @@ class _EditPropertyScreenState extends State<EditPropertyScreen> {
   final TextEditingController priceCtrl       = TextEditingController();
   final TextEditingController roomNameCtrl    = TextEditingController();
   final TextEditingController discountCtrl    = TextEditingController();
+  final TextEditingController minNightsCtrl   = TextEditingController(text: '1');
+  final TextEditingController maxNightsCtrl   = TextEditingController();
+
+  // ── Map coordinates (B3) ────────────────────────────────────────────────
+  double? _latitude;
+  double? _longitude;
+  String  _city = '';
+
+  // ── Structured amenities (B4) ───────────────────────────────────────────
+  List<Amenity> _amenityCatalog = const [];
+  final Set<String> _selectedAmenities = {};
+
+  String _cancellationPolicy = 'moderate';
+
+  static const Map<String, String> _policyBlurb = {
+    'flexible': 'Guests can cancel up to 24 hours before check-in.',
+    'moderate': 'Guests can cancel up to 5 days before check-in.',
+    'strict':   'Guests can cancel up to 14 days before check-in.',
+  };
   final TextEditingController facilitiesCtrl  = TextEditingController();
   final TextEditingController descriptionCtrl = TextEditingController();
   final TextEditingController bedroomsCtrl    = TextEditingController();
@@ -63,7 +84,33 @@ class _EditPropertyScreenState extends State<EditPropertyScreen> {
   @override
   void initState() {
     super.initState();
+    AmenityCatalog.load().then((list) {
+      if (mounted) setState(() => _amenityCatalog = list);
+    });
     fetchProperty();
+  }
+
+  Future<void> _pickOnMap() async {
+    final picked = await Navigator.push<PickedLocation>(
+      context,
+      CustomPageRoute(
+        child: LocationPickerPage(
+          initialLatitude: _latitude,
+          initialLongitude: _longitude,
+          initialAddress: locationCtrl.text.trim(),
+        ),
+      ),
+    );
+    if (picked == null || !mounted) return;
+
+    setState(() {
+      _latitude = picked.latitude;
+      _longitude = picked.longitude;
+      if (picked.city.isNotEmpty) _city = picked.city;
+      if (locationCtrl.text.trim().isEmpty && picked.address.isNotEmpty) {
+        locationCtrl.text = picked.address;
+      }
+    });
   }
 
   // ── Fetch existing property ──────────────────────────────────────────────
@@ -101,6 +148,26 @@ class _EditPropertyScreenState extends State<EditPropertyScreen> {
         imageUrls[0] = response['image1_url'];
         imageUrls[1] = response['image2_url'];
         imageUrls[2] = response['image3_url'];
+
+        _latitude  = (response['latitude']  as num?)?.toDouble();
+        _longitude = (response['longitude'] as num?)?.toDouble();
+        _city      = response['city']?.toString() ?? '';
+        minNightsCtrl.text = (response['min_nights'] ?? 1).toString();
+        maxNightsCtrl.text = response['max_nights']?.toString() ?? '';
+        _cancellationPolicy = response['cancellation_policy'] ?? 'moderate';
+      });
+
+      final amenityRows = await supabase
+          .from('property_amenities')
+          .select('amenity_key')
+          .eq('property_id', widget.propertyId);
+
+      if (!mounted) return;
+      setState(() {
+        _selectedAmenities
+          ..clear()
+          ..addAll(List<Map<String, dynamic>>.from(amenityRows)
+              .map((r) => r['amenity_key'].toString()));
       });
     } catch (e) {
       debugPrint('Error fetching property: $e');
@@ -299,6 +366,12 @@ class _EditPropertyScreenState extends State<EditPropertyScreen> {
           .update({
             'room_name':        roomNameCtrl.text.trim(),
             'location':         locationCtrl.text.trim(),
+            'city':             _city.isEmpty ? null : _city,
+            'latitude':         _latitude,
+            'longitude':        _longitude,
+            'min_nights':       int.tryParse(minNightsCtrl.text.trim()) ?? 1,
+            'max_nights':       int.tryParse(maxNightsCtrl.text.trim()),
+            'cancellation_policy': _cancellationPolicy,
             'price_per_night':  double.tryParse(priceCtrl.text.trim()) ?? 0,
             'discount':         double.tryParse(discountCtrl.text.trim()) ?? 0,
             'facilities':       facilitiesCtrl.text.trim(),
@@ -314,6 +387,21 @@ class _EditPropertyScreenState extends State<EditPropertyScreen> {
           })
           .eq('id', widget.propertyId);
 
+      // Replace the amenity set wholesale — simpler and safer than diffing,
+      // and the row count per property is tiny.
+      await supabase
+          .from('property_amenities')
+          .delete()
+          .eq('property_id', widget.propertyId);
+
+      if (_selectedAmenities.isNotEmpty) {
+        await supabase.from('property_amenities').insert([
+          for (final key in _selectedAmenities)
+            {'property_id': widget.propertyId, 'amenity_key': key}
+        ]);
+      }
+
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Property updated successfully ✅'),
         backgroundColor: AppColors.darkTeal,
@@ -327,6 +415,132 @@ class _EditPropertyScreenState extends State<EditPropertyScreen> {
     } finally {
       setState(() => loading = false);
     }
+  }
+
+  // ── Map pin & amenity widgets ────────────────────────────────────────────
+
+  Widget _mapPinTile() {
+    final pinned = _latitude != null && _longitude != null;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: pinned ? const Color(0xFFF1F8F4) : const Color(0xFFFFF8E1),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: pinned ? Colors.green.shade100 : Colors.amber.shade200,
+            ),
+          ),
+          child: Row(children: [
+            Icon(
+              pinned ? Icons.check_circle_rounded : Icons.info_outline_rounded,
+              size: 20,
+              color: pinned ? Colors.green.shade700 : Colors.amber.shade800,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    pinned ? 'Location pinned' : 'This listing has no map pin',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                      color:
+                          pinned ? Colors.green.shade800 : Colors.amber.shade900,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    pinned
+                        ? '${_latitude!.toStringAsFixed(5)}, ${_longitude!.toStringAsFixed(5)}'
+                            '${_city.isEmpty ? '' : '  ·  $_city'}'
+                        : 'Add one so it shows up in distance searches.',
+                    style: const TextStyle(fontSize: 11, color: Colors.black54),
+                  ),
+                ],
+              ),
+            ),
+          ]),
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.darkTeal,
+              side: const BorderSide(color: AppColors.lightTeal),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape:
+                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+            icon: const Icon(Icons.add_location_alt_rounded, size: 18),
+            label: Text(pinned ? 'Change location' : 'Pin on map'),
+            onPressed: _pickOnMap,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _amenityGrid() {
+    if (_amenityCatalog.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: Text('Loading amenities…',
+            style: TextStyle(fontSize: 12, color: Colors.black45)),
+      );
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: _amenityCatalog.map((a) {
+        final selected = _selectedAmenities.contains(a.key);
+        return GestureDetector(
+          onTap: () => setState(() {
+            selected
+                ? _selectedAmenities.remove(a.key)
+                : _selectedAmenities.add(a.key);
+          }),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(
+              gradient: selected
+                  ? const LinearGradient(colors: AppColors.primaryGradient)
+                  : null,
+              color: selected ? null : const Color(0xFFF5F7FA),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: selected ? Colors.transparent : Colors.grey.shade200,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(a.iconData,
+                    size: 15,
+                    color: selected ? Colors.white : AppColors.darkTeal),
+                const SizedBox(width: 7),
+                Text(
+                  a.label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: selected ? Colors.white : Colors.black87,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
+    );
   }
 
   // ── Build ────────────────────────────────────────────────────────────────
@@ -533,6 +747,67 @@ class _EditPropertyScreenState extends State<EditPropertyScreen> {
                                 icon: Icons.description_rounded,
                                 maxLines: 4,
                                 bottomPad: 0),
+                          ]),
+                        ),
+
+                        const SizedBox(height: 16),
+
+                        // ── Map pin ──────────────────────────────────────
+                        _sectionCard(
+                          icon: Icons.map_rounded,
+                          title: 'Map Location',
+                          subtitle: 'Guests search by distance',
+                          child: _mapPinTile(),
+                        ),
+
+                        const SizedBox(height: 16),
+
+                        // ── Amenities ────────────────────────────────────
+                        _sectionCard(
+                          icon: Icons.checklist_rounded,
+                          title: 'Amenities',
+                          subtitle: 'Guests filter on these',
+                          child: _amenityGrid(),
+                        ),
+
+                        const SizedBox(height: 16),
+
+                        // ── Stay rules ───────────────────────────────────
+                        _sectionCard(
+                          icon: Icons.rule_rounded,
+                          title: 'Stay Rules',
+                          subtitle: 'Length of stay and cancellation terms',
+                          child: Column(children: [
+                            Row(children: [
+                              Expanded(
+                                  child: _compactField('Min Nights',
+                                      minNightsCtrl, Icons.nights_stay_rounded)),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                  child: _compactField('Max Nights',
+                                      maxNightsCtrl, Icons.event_busy_rounded)),
+                            ]),
+                            const SizedBox(height: 16),
+                            _chipSelector(
+                              items: const ['flexible', 'moderate', 'strict'],
+                              icons: const {
+                                'flexible': Icons.sentiment_satisfied_rounded,
+                                'moderate': Icons.balance_rounded,
+                                'strict': Icons.gavel_rounded,
+                              },
+                              selected: _cancellationPolicy,
+                              onSelect: (v) =>
+                                  setState(() => _cancellationPolicy = v),
+                            ),
+                            const SizedBox(height: 10),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                _policyBlurb[_cancellationPolicy] ?? '',
+                                style: const TextStyle(
+                                    fontSize: 12, color: Colors.black54),
+                              ),
+                            ),
                           ]),
                         ),
 
