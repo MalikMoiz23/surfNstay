@@ -1,79 +1,30 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+/// Booking state changes run as single database transactions.
+///
+/// These used to be four sequential client-side writes (update status, read
+/// details, insert two notifications, mark the source notification read). A
+/// dropped connection part-way through left a confirmed booking that nobody
+/// was told about, or a rejected booking whose dates stayed blocked. The SQL
+/// functions in sql/001_plan_a.sql do all of it atomically and also enforce
+/// that the caller actually owns the property.
 class BookingService {
   static final supabase = Supabase.instance.client;
 
+  /// Host accepts a request. Conflicting pending requests for the same dates
+  /// are rejected and their travellers notified, inside the same transaction.
   static Future<void> acceptBooking(String bookingId, String notificationId) async {
-    // 1. Update Booking Status
-    await supabase
-        .from('bookings')
-        .update({'status': 'confirmed'})
-        .eq('id', bookingId);
-
-    // 2. Fetch booking details to notify both parties
-    final booking = await supabase
-        .from('bookings')
-        .select('traveller_id, properties(room_name, host_id), travellers(name)')
-        .eq('id', bookingId)
-        .single();
-
-    final travellerId = booking['traveller_id'];
-    final travellerName = booking['travellers']['name'] ?? "Traveller";
-    final roomName = booking['properties']['room_name'] ?? "your room";
-    final hostId = booking['properties']['host_id'];
-
-    // 3. Notify Traveller
-    await supabase.from('notifications').insert({
-      'user_id': travellerId,
-      'booking_id': bookingId,
-      'category': 'booking_accepted', // ✅ Unified category
-      'message': 'Stay Confirmed! Your booking for $roomName has been accepted by the host.',
+    await supabase.rpc('accept_booking', params: {
+      'p_booking_id': bookingId,
+      'p_notification_id': notificationId,
     });
-
-    // 4. Notify Host (Own confirmation)
-    await supabase.from('notifications').insert({
-      'user_id': hostId,
-      'booking_id': bookingId,
-      'category': 'booking_accepted', // ✅ Unified category
-      'message': 'Booking Confirmed! You accepted $travellerName\'s request for $roomName.',
-    });
-
-    // 5. Mark current notification (the request) as read
-    await supabase
-        .from('notifications')
-        .update({'is_read': true})
-        .eq('id', notificationId);
   }
 
+  /// Host declines a request.
   static Future<void> rejectBooking(String bookingId, String notificationId) async {
-    // 1. Update Booking Status
-    await supabase
-        .from('bookings')
-        .update({'status': 'cancelled'})
-        .eq('id', bookingId);
-
-    // 2. Fetch booking details to notify traveller
-    final booking = await supabase
-        .from('bookings')
-        .select('traveller_id, properties(room_name)')
-        .eq('id', bookingId)
-        .single();
-
-    final travellerId = booking['traveller_id'];
-    final roomName = booking['properties']['room_name'] ?? "your room";
-
-    // 3. Notify Traveller
-    await supabase.from('notifications').insert({
-      'user_id': travellerId,
-      'booking_id': bookingId,
-      'category': 'booking_info',
-      'message': 'Sorry, your booking request for $roomName was declined by the host.',
+    await supabase.rpc('reject_booking', params: {
+      'p_booking_id': bookingId,
+      'p_notification_id': notificationId,
     });
-
-    // 4. Mark current notification as read
-    await supabase
-        .from('notifications')
-        .update({'is_read': true})
-        .eq('id', notificationId);
   }
 }

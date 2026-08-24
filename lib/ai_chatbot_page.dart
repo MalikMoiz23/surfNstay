@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'traveller_dashboard.dart';
-import 'wishlist_page.dart';
+import 'my_trips_page.dart';
 import 'messages_page.dart';
 import 'profile_page.dart';
 
@@ -12,7 +12,7 @@ import 'profile_page.dart';
 //    Physical device on same WiFi → http://<YOUR_PC_IP>:8000
 //    Cloud deployment → https://your-deployed-url.com
 // ──────────────────────────────────────────────────────────────
-const String _kApiBase = "http://10.0.2.2:8000";
+const String _kApiBase = "https://malikmoiz-surf-n-stay-chatbot.hf.space";
 
 class AiChatbotPage extends StatefulWidget {
   const AiChatbotPage({super.key});
@@ -24,19 +24,19 @@ class AiChatbotPage extends StatefulWidget {
 class _AiChatbotPageState extends State<AiChatbotPage> {
   int _selectedIndex = 2;
 
-  static const Color primary   = Color(0xFF0F4C5C);
-  static const Color accent    = Color(0xFF26C6DA);
-  static const Color bg        = Color(0xFFF7F9FB);
+  static const Color primary = Color(0xFF0F4C5C);
+  static const Color accent = Color(0xFF26C6DA);
+  static const Color bg = Color(0xFFF7F9FB);
   static const Color textLight = Color(0xFF64748B);
 
-  final TextEditingController _ctrl     = TextEditingController();
-  final ScrollController       _scroll  = ScrollController();
+  final TextEditingController _ctrl = TextEditingController();
+  final ScrollController _scroll = ScrollController();
 
   // Each message: { "sender": "user"/"bot"/"typing", "text": "..." }
   final List<Map<String, String>> _messages = [];
   String _sessionId = "";
-  bool   _isLoading = false;
-  bool   _apiOnline = true;
+  bool _isLoading = false;
+  bool _apiOnline = true;
 
   @override
   void initState() {
@@ -84,14 +84,13 @@ class _AiChatbotPageState extends State<AiChatbotPage> {
     _scrollDown();
 
     try {
-      final response = await http.post(
-        Uri.parse("$_kApiBase/chat"),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({
-          "message":    text,
-          "session_id": _sessionId,
-        }),
-      ).timeout(const Duration(seconds: 30));
+      final response = await http
+          .post(
+            Uri.parse("$_kApiBase/chat"),
+            headers: {"Content-Type": "application/json"},
+            body: jsonEncode({"message": text, "session_id": _sessionId}),
+          )
+          .timeout(const Duration(seconds: 30));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -131,12 +130,23 @@ class _AiChatbotPageState extends State<AiChatbotPage> {
     if (_selectedIndex == index) return;
     Widget page;
     switch (index) {
-      case 0: page = const TravellerDashboard(); break;
-      case 1: page = const WishlistPage();       break;
-      case 2: page = const AiChatbotPage();      break;
-      case 3: page = const MessagesPage();       break;
-      case 4: page = const ProfilePage();        break;
-      default: return;
+      case 0:
+        page = const TravellerDashboard();
+        break;
+      case 1:
+        page = const MyTripsPage();
+        break;
+      case 2:
+        page = const AiChatbotPage();
+        break;
+      case 3:
+        page = const MessagesPage();
+        break;
+      case 4:
+        page = const ProfilePage();
+        break;
+      default:
+        return;
     }
     Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => page));
   }
@@ -153,7 +163,8 @@ class _AiChatbotPageState extends State<AiChatbotPage> {
         title: Row(
           children: [
             Container(
-              width: 36, height: 36,
+              width: 36,
+              height: 36,
               decoration: BoxDecoration(
                 color: accent,
                 borderRadius: BorderRadius.circular(10),
@@ -164,8 +175,14 @@ class _AiChatbotPageState extends State<AiChatbotPage> {
             const Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text("SurfNStay AI", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                Text("Tourist Recommender",   style: TextStyle(fontSize: 11, color: Colors.white70)),
+                Text(
+                  "SurfNStay AI",
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  "Tourist Recommender",
+                  style: TextStyle(fontSize: 11, color: Colors.white70),
+                ),
               ],
             ),
           ],
@@ -180,11 +197,16 @@ class _AiChatbotPageState extends State<AiChatbotPage> {
             ),
             child: Row(
               children: [
-                Icon(_apiOnline ? Icons.circle : Icons.circle_outlined,
-                    size: 8, color: Colors.white),
+                Icon(
+                  _apiOnline ? Icons.circle : Icons.circle_outlined,
+                  size: 8,
+                  color: Colors.white,
+                ),
                 const SizedBox(width: 4),
-                Text(_apiOnline ? "Online" : "Offline",
-                    style: const TextStyle(color: Colors.white, fontSize: 11)),
+                Text(
+                  _apiOnline ? "Online" : "Offline",
+                  style: const TextStyle(color: Colors.white, fontSize: 11),
+                ),
               ],
             ),
           ),
@@ -193,8 +215,7 @@ class _AiChatbotPageState extends State<AiChatbotPage> {
       body: Column(
         children: [
           // Suggestion chips
-          if (_messages.length == 1)
-            _suggestionChips(),
+          if (_messages.length == 1) _suggestionChips(),
 
           // Chat list
           Expanded(
@@ -218,11 +239,11 @@ class _AiChatbotPageState extends State<AiChatbotPage> {
         unselectedItemColor: textLight,
         showUnselectedLabels: true,
         items: [
-          _navItem(Icons.home,              "Home",     0),
-          _navItem(Icons.favorite,          "Wishlist", 1),
-          _navItem(Icons.smart_toy_outlined,"Chatbot",  2),
-          _navItem(Icons.message_outlined,  "Messages", 3),
-          _navItem(Icons.person_outline,    "Profile",  4),
+          _navItem(Icons.home, "Home", 0),
+          _navItem(Icons.luggage_rounded, "Trips", 1),
+          _navItem(Icons.smart_toy_outlined, "Chatbot", 2),
+          _navItem(Icons.message_outlined, "Messages", 3),
+          _navItem(Icons.person_outline, "Profile", 4),
         ],
         onTap: _onNavTap,
       ),
@@ -241,30 +262,40 @@ class _AiChatbotPageState extends State<AiChatbotPage> {
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: Row(
-        children: chips.map((c) => GestureDetector(
-          onTap: () {
-            _ctrl.text = c;
-            _sendMessage();
-          },
-          child: Container(
-            margin: const EdgeInsets.only(right: 8),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF0F4C5C), Color(0xFF26C6DA)],
+        children: chips
+            .map(
+              (c) => GestureDetector(
+                onTap: () {
+                  _ctrl.text = c;
+                  _sendMessage();
+                },
+                child: Container(
+                  margin: const EdgeInsets.only(right: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF0F4C5C), Color(0xFF26C6DA)],
+                    ),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    c,
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                  ),
+                ),
               ),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Text(c, style: const TextStyle(color: Colors.white, fontSize: 13)),
-          ),
-        )).toList(),
+            )
+            .toList(),
       ),
     );
   }
 
   // ── Chat Bubble ────────────────────────────────────────────────
   Widget _buildBubble(Map<String, String> msg) {
-    final isUser   = msg["sender"] == "user";
+    final isUser = msg["sender"] == "user";
     final isTyping = msg["sender"] == "typing";
 
     if (isTyping) {
@@ -275,7 +306,9 @@ class _AiChatbotPageState extends State<AiChatbotPage> {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(18).copyWith(bottomLeft: Radius.zero),
+            borderRadius: BorderRadius.circular(
+              18,
+            ).copyWith(bottomLeft: Radius.zero),
             boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)],
           ),
           child: Row(
@@ -289,7 +322,9 @@ class _AiChatbotPageState extends State<AiChatbotPage> {
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Row(
-        mainAxisAlignment: isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+        mainAxisAlignment: isUser
+            ? MainAxisAlignment.end
+            : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           if (!isUser) ...[
@@ -309,13 +344,14 @@ class _AiChatbotPageState extends State<AiChatbotPage> {
             decoration: BoxDecoration(
               color: isUser ? primary : Colors.white,
               borderRadius: BorderRadius.circular(18).copyWith(
-                bottomRight: isUser   ? Radius.zero : const Radius.circular(18),
-                bottomLeft:  !isUser  ? Radius.zero : const Radius.circular(18),
+                bottomRight: isUser ? Radius.zero : const Radius.circular(18),
+                bottomLeft: !isUser ? Radius.zero : const Radius.circular(18),
               ),
               boxShadow: [
                 BoxShadow(
                   color: (isUser ? primary : Colors.black).withOpacity(0.10),
-                  blurRadius: 6, offset: const Offset(0, 3),
+                  blurRadius: 6,
+                  offset: const Offset(0, 3),
                 ),
               ],
             ),
@@ -341,7 +377,8 @@ class _AiChatbotPageState extends State<AiChatbotPage> {
       duration: Duration(milliseconds: 500 + index * 150),
       builder: (_, v, __) => Container(
         margin: const EdgeInsets.symmetric(horizontal: 2),
-        width: 7, height: 7,
+        width: 7,
+        height: 7,
         decoration: BoxDecoration(
           color: accent.withOpacity(0.4 + 0.6 * v),
           shape: BoxShape.circle,
@@ -356,7 +393,13 @@ class _AiChatbotPageState extends State<AiChatbotPage> {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: const BoxDecoration(
         color: Colors.white,
-        boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 8, offset: Offset(0, -2))],
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black12,
+            blurRadius: 8,
+            offset: Offset(0, -2),
+          ),
+        ],
       ),
       child: SafeArea(
         child: Row(
@@ -368,14 +411,20 @@ class _AiChatbotPageState extends State<AiChatbotPage> {
                 onSubmitted: (_) => _sendMessage(),
                 decoration: InputDecoration(
                   hintText: "Ask about places in Pakistan...",
-                  hintStyle: const TextStyle(color: Color(0xFF94A3B8), fontSize: 14),
+                  hintStyle: const TextStyle(
+                    color: Color(0xFF94A3B8),
+                    fontSize: 14,
+                  ),
                   filled: true,
                   fillColor: const Color(0xFFF1F5F9),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(24),
                     borderSide: BorderSide.none,
                   ),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 12,
+                  ),
                 ),
               ),
             ),
@@ -388,13 +437,23 @@ class _AiChatbotPageState extends State<AiChatbotPage> {
                 ),
                 shape: BoxShape.circle,
                 boxShadow: [
-                  BoxShadow(color: primary.withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 4)),
+                  BoxShadow(
+                    color: primary.withOpacity(0.3),
+                    blurRadius: 8,
+                    offset: const Offset(0, 4),
+                  ),
                 ],
               ),
               child: IconButton(
                 icon: _isLoading
-                    ? const SizedBox(width: 20, height: 20,
-                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2,
+                        ),
+                      )
                     : const Icon(Icons.send_rounded, color: Colors.white),
                 onPressed: _isLoading ? null : _sendMessage,
               ),
@@ -418,7 +477,10 @@ class _AiChatbotPageState extends State<AiChatbotPage> {
                 borderRadius: BorderRadius.circular(12),
               )
             : null,
-        child: Icon(icon, color: _selectedIndex == index ? Colors.white : textLight),
+        child: Icon(
+          icon,
+          color: _selectedIndex == index ? Colors.white : textLight,
+        ),
       ),
       label: label,
     );

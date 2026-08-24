@@ -5,7 +5,7 @@ import 'app_theme.dart';
 import 'page_transition.dart';
 import 'host_public_profile.dart';
 import 'traveller_public_profile.dart';
-import 'login_screen.dart'; // ✅ added
+import 'auth_gate.dart';
 
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({super.key});
@@ -63,6 +63,42 @@ class _AdminDashboardState extends State<AdminDashboard> with SingleTickerProvid
     }
   }
 
+  bool _isHostBlocked(String hostId) {
+    final host = hosts.firstWhere((h) => h['id'] == hostId, orElse: () => {});
+    return host['is_blocked'] == true;
+  }
+
+  bool _isTravellerBlocked(String travellerId) {
+    final traveller = travellers.firstWhere((t) => t['id'] == travellerId, orElse: () => {});
+    return traveller['is_blocked'] == true;
+  }
+
+  Future<void> _toggleBlockUser({
+    required String userId,
+    required String role,
+    required bool block,
+  }) async {
+    setState(() => loading = true);
+    try {
+      final table = role.toLowerCase() == 'host' ? 'hosts' : 'travellers';
+      await supabase.from(table).update({'is_blocked': block}).eq('id', userId);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${role.toUpperCase()} has been ${block ? 'blocked' : 'unblocked'} successfully!'),
+          backgroundColor: block ? Colors.red : Colors.green,
+        ),
+      );
+      await _fetchAllData();
+    } catch (e) {
+      debugPrint("Admin Error: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
+      );
+      setState(() => loading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -84,11 +120,14 @@ class _AdminDashboardState extends State<AdminDashboard> with SingleTickerProvid
         actions: [
           IconButton(onPressed: _fetchAllData, icon: const Icon(Icons.refresh)),
           IconButton(
-            onPressed: () {
-              // ✅ Correct Logout navigation
+            onPressed: () async {
+              // Admin is now a real Supabase session, so it must actually be
+              // ended — previously this only navigated away.
+              await supabase.auth.signOut();
+              if (!context.mounted) return;
               Navigator.pushAndRemoveUntil(
                 context,
-                MaterialPageRoute(builder: (context) => const LoginScreen()),
+                MaterialPageRoute(builder: (_) => const AuthGate()),
                 (route) => false,
               );
             },
@@ -97,6 +136,8 @@ class _AdminDashboardState extends State<AdminDashboard> with SingleTickerProvid
         ],
         bottom: TabBar(
           controller: _tabController,
+          labelColor: Colors.black,
+          unselectedLabelColor: Colors.white,
           indicator: const UnderlineTabIndicator(
             borderSide: BorderSide(width: 4.0, color: Colors.white),
             insets: EdgeInsets.symmetric(horizontal: 40.0),
@@ -186,6 +227,8 @@ class _AdminDashboardState extends State<AdminDashboard> with SingleTickerProvid
   }
 
   Widget _userCard({required String name, required String email, required String image, required String role, required String userId}) {
+    final isBlocked = role == "Host" ? _isHostBlocked(userId) : _isTravellerBlocked(userId);
+    
     return Card(
       elevation: 0,
       margin: const EdgeInsets.only(bottom: 12),
@@ -200,17 +243,40 @@ class _AdminDashboardState extends State<AdminDashboard> with SingleTickerProvid
         ),
         title: Text(name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
         subtitle: Text(email, style: const TextStyle(color: Colors.grey, fontSize: 13)),
-        trailing: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-            color: role == "Host" ? Colors.blue.withOpacity(0.1) : Colors.teal.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Text(role.toUpperCase(), style: TextStyle(
-            color: role == "Host" ? Colors.blue[800] : Colors.teal[800],
-            fontSize: 10, 
-            fontWeight: FontWeight.bold
-          )),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: isBlocked
+                    ? Colors.red.withOpacity(0.1)
+                    : (role == "Host" ? Colors.blue.withOpacity(0.1) : Colors.teal.withOpacity(0.1)),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                isBlocked ? "BLOCKED" : role.toUpperCase(),
+                style: TextStyle(
+                  color: isBlocked
+                      ? Colors.red[800]
+                      : (role == "Host" ? Colors.blue[800] : Colors.teal[800]),
+                  fontSize: 10, 
+                  fontWeight: FontWeight.bold
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              icon: Icon(
+                isBlocked ? Icons.lock_open_rounded : Icons.block_rounded,
+                color: isBlocked ? Colors.green : Colors.red,
+              ),
+              tooltip: isBlocked ? 'Unblock User' : 'Block User',
+              onPressed: () {
+                _toggleBlockUser(userId: userId, role: role, block: !isBlocked);
+              },
+            ),
+          ],
         ),
         onTap: () {
           if (role == "Host") {
@@ -236,6 +302,12 @@ class _AdminDashboardState extends State<AdminDashboard> with SingleTickerProvid
       itemBuilder: (context, index) {
         final r = reports[index];
         final type = r['report_type'] ?? "room";
+        
+        final reportedUserId = type == "traveller" ? r['reported_user_id'] : r['room_host_id'];
+        final reportedUserRole = type == "traveller" ? "Traveller" : "Host";
+        final bool isReportedUserBlocked = reportedUserId != null
+            ? (type == "traveller" ? _isTravellerBlocked(reportedUserId) : _isHostBlocked(reportedUserId))
+            : false;
         
         // Data derived directly from the SQL View
         final reporterName = r['reporter_name'] ?? "A User";
@@ -402,7 +474,33 @@ class _AdminDashboardState extends State<AdminDashboard> with SingleTickerProvid
                     const Icon(Icons.history, size: 16, color: Colors.green),
                     const SizedBox(width: 8),
                     const Text("Audit Trail Logged", style: TextStyle(fontSize: 12, color: Colors.green, fontWeight: FontWeight.bold)),
-                    const Spacer(),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    if (reportedUserId != null) ...[
+                      TextButton.icon(
+                        icon: Icon(
+                          isReportedUserBlocked ? Icons.lock_open_rounded : Icons.block_rounded,
+                          size: 16,
+                          color: isReportedUserBlocked ? Colors.green : Colors.red,
+                        ),
+                        label: Text(
+                          isReportedUserBlocked ? "Unblock $reportedUserRole" : "Block $reportedUserRole",
+                          style: TextStyle(color: isReportedUserBlocked ? Colors.green : Colors.red, fontWeight: FontWeight.bold),
+                        ),
+                        onPressed: () {
+                          _toggleBlockUser(
+                            userId: reportedUserId,
+                            role: reportedUserRole,
+                            block: !isReportedUserBlocked,
+                          );
+                        },
+                      ),
+                      const SizedBox(width: 8),
+                    ],
                     TextButton(
                       onPressed: () {
                         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Resolution features coming soon!")));

@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:surfNstay/login_screen.dart';
+import 'auth_gate.dart';
 import 'traveller_dashboard.dart';
 import 'wishlist_page.dart';
+import 'my_trips_page.dart';
 import 'messages_page.dart';
 import 'ai_chatbot_page.dart';
 import 'host_dashboard.dart';
@@ -113,7 +114,7 @@ class _ProfilePageState extends State<ProfilePage> {
         page = const TravellerDashboard();
         break;
       case 1:
-        page = const WishlistPage();
+        page = const MyTripsPage();
         break;
       case 2:
         page = const AiChatbotPage();
@@ -250,6 +251,17 @@ class _ProfilePageState extends State<ProfilePage> {
                 },
               ),
               const SizedBox(height: 16),
+              // Wishlist moved here when the Trips tab took its place in the nav bar.
+              _actionTile(
+                icon: Icons.favorite_border,
+                title: "My Wishlist",
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    CustomPageRoute(child: const WishlistPage()),
+                  );
+                },
+              ),
               _actionTile(
                 icon: Icons.settings_outlined,
                 title: "Account Settings",
@@ -280,11 +292,13 @@ class _ProfilePageState extends State<ProfilePage> {
                 iconColor: danger,
                 onTap: () async {
                   await Supabase.instance.client.auth.signOut();
+                  if (!context.mounted) return;
+                  // Reset to AuthGate rather than pushing LoginScreen directly,
+                  // so session state and the visible screen cannot disagree.
                   Navigator.pushAndRemoveUntil(
                     context,
-                    MaterialPageRoute(
-                        builder: (_) => const LoginScreen()),
-                        (route) => false,
+                    MaterialPageRoute(builder: (_) => const AuthGate()),
+                    (route) => false,
                   );
                 },
               ),
@@ -302,7 +316,7 @@ class _ProfilePageState extends State<ProfilePage> {
         showUnselectedLabels: true,
         items: [
           _bottomNavItem(Icons.home, "Home", 0),
-          _bottomNavItem(Icons.favorite, "Wishlist", 1),
+          _bottomNavItem(Icons.luggage_rounded, "Trips", 1),
           _bottomNavItem(Icons.smart_toy_outlined, "Chatbot", 2),
           _bottomNavItem(Icons.message_outlined, "Messages", 3),
           _bottomNavItem(Icons.person_outline, "Profile", 4),

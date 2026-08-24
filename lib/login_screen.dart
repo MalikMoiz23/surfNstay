@@ -1,14 +1,11 @@
 import 'package:flutter/material.dart';
 import 'app_theme.dart';
 import 'page_transition.dart';
-// import 'package:firebase_auth/firebase_auth.dart';
-// import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'auth_gate.dart';
 import 'signup_choice_screen.dart';
-import 'traveller_dashboard.dart';
-import 'host_dashboard.dart';
-import 'admin_dashboard.dart';
+import 'validators.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -24,107 +21,62 @@ class _LoginScreenState extends State<LoginScreen> {
   bool loading = false;
   bool _obscurePassword = true; // 👁️ eye toggle
 
-  // final FirebaseAuth _auth = FirebaseAuth.instance;
-  // final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-
   final supabase = Supabase.instance.client;
 
-  void login() async {
-    String email = emailController.text.trim();
-    String password = passwordController.text.trim();
+  @override
+  void initState() {
+    super.initState();
+    // If AuthGate signed someone out for being blocked, explain why.
+    final msg = SessionResolver.blockedMessage;
+    if (msg != null) {
+      SessionResolver.blockedMessage = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(msg), backgroundColor: Colors.red),
+        );
+      });
+    }
+  }
 
-    if (email.isEmpty || password.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please fill all fields')),
-      );
+  void _snack(String msg, {bool error = true}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: error ? Colors.red : AppColors.darkTeal,
+      ),
+    );
+  }
+
+  /// Signs in only. Role routing and the blocked-account check live in
+  /// [AuthGate], which reacts to the session change and swaps the root widget —
+  /// so there is deliberately no Navigator call in the success path.
+  void login() async {
+    final email = emailController.text.trim();
+    final password = passwordController.text;
+
+    final emailError = Validators.email(email);
+    if (emailError != null) {
+      _snack(emailError);
+      return;
+    }
+    if (password.isEmpty) {
+      _snack('Please enter your password');
       return;
     }
 
     setState(() => loading = true);
 
     try {
-      // 🔑 Admin login
-      if (email == 'admin@surfNstay.com' && password == '303136') {
-        Navigator.pushReplacement(
-          context,
-          CustomPageRoute(child: const AdminDashboard()),
-        );
-        return;
-      }
-
-      // UserCredential userCred = await _auth.signInWithEmailAndPassword(
-      //   email: email,
-      //   password: password,
-      // );
-      //
-      // String uid = userCred.user!.uid;
-
-      final response = await supabase.auth.signInWithPassword(
-        email: email,
-        password: password,
-      );
-
-      final uid = response.user!.id;
-
-
-
-      // DocumentSnapshot travellerDoc =
-      // await _firestore.collection('travellers').doc(uid).get();
-      // if (travellerDoc.exists) {
-      //   Navigator.pushReplacement(
-      //     context,
-      //     MaterialPageRoute(builder: (_) => const TravellerDashboard()),
-      //   );
-      //   return;
-      // }
-
-      final traveller = await supabase
-          .from('travellers')
-          .select()
-          .eq('id', uid)
-          .maybeSingle();
-
-      if (traveller != null) {
-        Navigator.pushReplacement(
-          context,
-          CustomPageRoute(child: const TravellerDashboard()),
-        );
-        return;
-      }
-
-      // DocumentSnapshot hostDoc =
-      // await _firestore.collection('hosts').doc(uid).get();
-      // if (hostDoc.exists) {
-      //   Navigator.pushReplacement(
-      //     context,
-      //     MaterialPageRoute(builder: (_) => const HostDashboard()),
-      //   );
-      //   return;
-      // }
-
-      final host = await supabase
-          .from('hosts')
-          .select()
-          .eq('id', uid)
-          .maybeSingle();
-
-      if (host != null) {
-        Navigator.pushReplacement(
-          context,
-          CustomPageRoute(child: const HostDashboard()),
-        );
-        return;
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('User role not found')),
-      );
+      await supabase.auth.signInWithPassword(email: email, password: password);
+      // AuthGate takes over from here.
+    } on AuthException catch (e) {
+      _snack(e.message);
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Login failed: ${e}')),
-      );
+      _snack('Login failed: $e');
     } finally {
-      setState(() => loading = false);
+      if (mounted) setState(() => loading = false);
     }
   }
 

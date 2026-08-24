@@ -1,9 +1,8 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
-import 'login_screen.dart';
 import 'app_theme.dart';
-import 'page_transition.dart';
 
+/// Pure splash. Shown by [AuthGate] while the session is being resolved — it
+/// must not navigate anywhere itself.
 class LaunchScreen extends StatefulWidget {
   const LaunchScreen({super.key});
 
@@ -49,13 +48,6 @@ class _LaunchScreenState extends State<LaunchScreen>
     );
 
     _controller.forward();
-
-    Timer(const Duration(seconds: 5), () {
-      Navigator.pushReplacement(
-        context,
-        CustomPageRoute(child: const LoginScreen()),
-      );
-    });
   }
 
   @override

@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
-// import 'package:firebase_auth/firebase_auth.dart';
-// import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'login_screen.dart';
+import 'validators.dart';
 
 class TravellerSignupScreen extends StatefulWidget {
   const TravellerSignupScreen({super.key});
@@ -100,18 +98,16 @@ class _TravellerSignupScreenState extends State<TravellerSignupScreen>
   }
 
   Future<void> signupTraveller() async {
-    if (nameCtrl.text.isEmpty ||
-        addressCtrl.text.isEmpty ||
-        phoneCtrl.text.isEmpty ||
-        emailCtrl.text.isEmpty ||
-        passwordCtrl.text.isEmpty ||
-        confirmPasswordCtrl.text.isEmpty) {
-      _showCenterMessage("All fields are required");
-      return;
-    }
+    final error = Validators.required(nameCtrl.text, 'Full name') ??
+        Validators.required(addressCtrl.text, 'Address') ??
+        Validators.phone(phoneCtrl.text) ??
+        Validators.email(emailCtrl.text) ??
+        Validators.password(passwordCtrl.text) ??
+        Validators.confirmPassword(
+            passwordCtrl.text, confirmPasswordCtrl.text);
 
-    if (passwordCtrl.text != confirmPasswordCtrl.text) {
-      _showCenterMessage("Passwords do not match");
+    if (error != null) {
+      _showCenterMessage(error);
       return;
     }
 
@@ -136,44 +132,49 @@ class _TravellerSignupScreenState extends State<TravellerSignupScreen>
       //   'createdAt': Timestamp.now(),
       // });
 
+      // The profile row is created by the on_auth_user_created trigger from
+      // this metadata. Inserting it here used to require an unauthenticated
+      // write, which breaks the moment RLS is switched on — and silently
+      // skipped the profile entirely when email confirmation was enabled.
       final response = await supabase.auth.signUp(
         email: emailCtrl.text.trim(),
-        password: passwordCtrl.text.trim(),
+        password: passwordCtrl.text,
+        data: {
+          'role': 'traveller',
+          'name': nameCtrl.text.trim(),
+          'phone': Validators.normalisePhone(phoneCtrl.text),
+          'address': addressCtrl.text.trim(),
+        },
       );
 
-      final user = response.user;
-
-      if (user != null) {
-        await supabase.from('travellers').insert({
-          'id': user.id,
-          'name': nameCtrl.text.trim(),
-          'address': addressCtrl.text.trim(),
-          'phone': phoneCtrl.text.trim(),
-          'email': emailCtrl.text.trim(),
-          'created_at': DateTime.now().toIso8601String(),
-        });
-      }
-
+      if (!mounted) return;
       setState(() => loading = false);
 
-      _showCenterMessage("Account created successfully", success: true);
-
-      Future.delayed(const Duration(milliseconds: 900), () {
-        Navigator.pushReplacement(
-          context,
-          PageRouteBuilder(
-            transitionDuration: const Duration(milliseconds: 600),
-            pageBuilder: (_, anim, __) => FadeTransition(
-              opacity: anim,
-              child: const LoginScreen(),
-            ),
-          ),
+      if (response.session != null) {
+        // Signed in immediately — AuthGate will route to the dashboard once
+        // this screen is popped off the stack.
+        _showCenterMessage("Account created successfully", success: true);
+        Future.delayed(const Duration(milliseconds: 900), () {
+          if (!mounted) return;
+          Navigator.popUntil(context, (route) => route.isFirst);
+        });
+      } else {
+        // Email confirmation is enabled on the project.
+        _showCenterMessage(
+          "Account created. Check your inbox to confirm your email, then log in.",
+          success: true,
         );
-      });
-    // } on FirebaseAuthException catch (e) {
-    //   setState(() => loading = false);
-    //   _showCenterMessage(e.message ?? "Firebase error");
+        Future.delayed(const Duration(milliseconds: 1600), () {
+          if (!mounted) return;
+          Navigator.popUntil(context, (route) => route.isFirst);
+        });
+      }
+    } on AuthException catch (e) {
+      if (!mounted) return;
+      setState(() => loading = false);
+      _showCenterMessage(e.message);
     } catch (e) {
+      if (!mounted) return;
       setState(() => loading = false);
       _showCenterMessage("Error: $e");
     }

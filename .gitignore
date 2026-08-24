@@ -43,3 +43,34 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Gradle build output. The root /build/ rule above does not cover this one.
+**/build/
+.gradle/
+*.apk
+*.aab
+*.jks
+*.keystore
+local.properties
+
+# Python backend (chatbot_api.py, ai_detector_api.py)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.ipynb_checkpoints/
+
+# Local server output
+server_log.txt
+server_out.txt
+server_err.txt
+nohup.out
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+secrets.json

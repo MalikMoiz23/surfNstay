@@ -5,7 +5,7 @@ import 'dart:io';
 // import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'login_screen.dart';
+import 'validators.dart';
 
 class HostSignupScreen extends StatefulWidget {
   const HostSignupScreen({super.key});
@@ -191,89 +191,59 @@ class _HostSignupScreenState extends State<HostSignupScreen>
   // }
 
   Future<void> _signupHost() async {
-    // 1️⃣ Validate inputs
-    if (fullName.text.isEmpty ||
-        phone.text.isEmpty ||
-        address.text.isEmpty ||
-        email.text.isEmpty ||
-        password.text.isEmpty ||
-        confirmPassword.text.isEmpty) {
-      _showCenterMessage("All fields are required");
+    final error = Validators.required(fullName.text, 'Full name') ??
+        Validators.phone(phone.text) ??
+        Validators.required(address.text, 'Address') ??
+        Validators.email(email.text) ??
+        Validators.password(password.text) ??
+        Validators.confirmPassword(password.text, confirmPassword.text);
+
+    if (error != null) {
+      _showCenterMessage(error);
       return;
     }
-
-    if (password.text != confirmPassword.text) {
-      _showCenterMessage("Passwords do not match");
-      return;
-    }
-
-    // if (_cnicImage == null) {
-    //   _showCenterMessage("Please upload CNIC image");
-    //   return;
-    // }
 
     setState(() => loading = true);
 
     try {
-      // 2️⃣ Create Supabase account
+      // The hosts row is created by the on_auth_user_created trigger from this
+      // metadata, so it works with RLS enabled and with email confirmation on.
       final response = await supabase.auth.signUp(
         email: email.text.trim(),
-        password: password.text.trim(),
+        password: password.text,
+        data: {
+          'role': 'host',
+          'fullName': fullName.text.trim(),
+          'phone': Validators.normalisePhone(phone.text),
+          'address': address.text.trim(),
+        },
       );
 
-      final user = response.user;
-      if (user == null) {
-        _showCenterMessage("Failed to create account");
-        setState(() => loading = false);
-        return;
-      }
-
-      // // 3️⃣ Upload CNIC image to Supabase Storage
-      // final fileBytes = await _cnicImage!.readAsBytes();
-      // final fileName =
-      //     'cnic_${user.id}_${DateTime.now().millisecondsSinceEpoch}.png';
-      //
-      // final storageResponse = await supabase
-      //     .storage
-      //     .from('host_cnic') // Make sure you created this bucket
-      //     .uploadBinary(fileName, fileBytes);
-      //
-      // if (storageResponse == null) {
-      //     _showCenterMessage("Failed to upload CNIC image");
-      //     setState(() => loading = false);
-      //     return;
-      // }
-
-      // Get public URL
-      // final cnicUrl = supabase.storage.from('host_cnic').getPublicUrl(fileName);
-
-      // 4️⃣ Insert host data into hosts table
-      await supabase.from('hosts').insert({
-        'id': user.id,
-        'fullName': fullName.text.trim(),
-        'phone': phone.text.trim(),
-        'address': address.text.trim(),
-        'email': email.text.trim(),
-        // 'cnic_url': cnicUrl,
-        'created_at': DateTime.now().toIso8601String(),
-      });
-
+      if (!mounted) return;
       setState(() => loading = false);
 
-      // 5️⃣ Success message & navigate to login
-      _showCenterMessage("Host account created successfully", success: true);
-
-      Future.delayed(const Duration(milliseconds: 900), () {
-        Navigator.pushReplacement(
-          context,
-          PageRouteBuilder(
-            transitionDuration: const Duration(milliseconds: 600),
-            pageBuilder: (_, anim, __) =>
-                FadeTransition(opacity: anim, child: const LoginScreen()),
-          ),
+      if (response.session != null) {
+        _showCenterMessage("Host account created successfully", success: true);
+        Future.delayed(const Duration(milliseconds: 900), () {
+          if (!mounted) return;
+          Navigator.popUntil(context, (route) => route.isFirst);
+        });
+      } else {
+        _showCenterMessage(
+          "Account created. Check your inbox to confirm your email, then log in.",
+          success: true,
         );
-      });
+        Future.delayed(const Duration(milliseconds: 1600), () {
+          if (!mounted) return;
+          Navigator.popUntil(context, (route) => route.isFirst);
+        });
+      }
+    } on AuthException catch (e) {
+      if (!mounted) return;
+      setState(() => loading = false);
+      _showCenterMessage(e.message);
     } catch (e) {
+      if (!mounted) return;
       setState(() => loading = false);
       _showCenterMessage("Error: $e");
     }

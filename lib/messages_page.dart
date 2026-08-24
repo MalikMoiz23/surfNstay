@@ -1,9 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'ChatScreen.dart';
 import 'traveller_dashboard.dart';
-import 'wishlist_page.dart';
+import 'my_trips_page.dart';
 import 'ai_chatbot_page.dart';
 import 'profile_page.dart';
 import 'host_dashboard.dart';
@@ -30,6 +32,42 @@ class _MessagesPageState extends State<MessagesPage> {
 
   String userName = "Loading...";
   String? currentUserId;
+  String? profileImageUrl;
+
+  /// Fetch profile image for current user
+  Future<void> _fetchProfileImage() async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+      // Try traveller profile picture
+      var tRes = await supabase
+          .from('travellers')
+          .select('profile_pic')
+          .eq('id', user.id)
+          .maybeSingle();
+      if (tRes != null && tRes['profile_pic'] != null) {
+        setState(() {
+          profileImageUrl = tRes['profile_pic'];
+        });
+        return;
+      }
+      // Try host profile picture
+      var hRes = await supabase
+          .from('hosts')
+          .select('profile_pic')
+          .eq('id', user.id)
+          .maybeSingle();
+      if (hRes != null && hRes['profile_pic'] != null) {
+        setState(() {
+          profileImageUrl = hRes['profile_pic'];
+        });
+      }
+    } catch (e) {
+      print('Profile image fetch error: $e');
+    }
+  }
+
+  /// Upload profile imageUrl;
 
   // Cache of partner names so we don't re-fetch every rebuild
   final Map<String, String> _partnerNameCache = {};
@@ -42,20 +80,71 @@ class _MessagesPageState extends State<MessagesPage> {
     final user = supabase.auth.currentUser;
     currentUserId = user?.id;
     if (currentUserId != null) {
-      // Stream the chats table - fires every time a row changes (including last_message, updated_at)
-      _chatsStream = supabase
-          .from('chats')
-          .stream(primaryKey: ['id'])
-          .order('updated_at', ascending: false)
-          .map((rows) => rows
-              .where((r) =>
-                  r['user1_id'] == currentUserId ||
-                  r['user2_id'] == currentUserId)
-              .toList());
+      // Two server-filtered subscriptions, merged locally.
+      //
+      // This previously subscribed to the whole `chats` table and filtered in
+      // Dart, which meant every device received every user's conversation
+      // rows. Realtime filters only support a single `eq`, so the OR is
+      // expressed as two streams. RLS (sql/001_plan_a.sql) is the real
+      // boundary; this keeps the client from asking for rows it cannot use.
+      _chatsStream = _mergeChatStreams(currentUserId!);
     } else {
       _chatsStream = const Stream.empty();
     }
     _fetchUserName();
+    _fetchProfileImage();
+  }
+
+  /// Merges the "I am user1" and "I am user2" subscriptions into one ordered
+  /// list, de-duplicated by chat id.
+  Stream<List<Map<String, dynamic>>> _mergeChatStreams(String uid) {
+    final controller = StreamController<List<Map<String, dynamic>>>();
+    final asUser1 = <String, Map<String, dynamic>>{};
+    final asUser2 = <String, Map<String, dynamic>>{};
+
+    void emit() {
+      if (controller.isClosed) return;
+      final merged = <String, Map<String, dynamic>>{...asUser1, ...asUser2};
+      final rows = merged.values.toList()
+        ..sort((a, b) {
+          final at = DateTime.tryParse(a['updated_at']?.toString() ?? '');
+          final bt = DateTime.tryParse(b['updated_at']?.toString() ?? '');
+          if (at == null && bt == null) return 0;
+          if (at == null) return 1;
+          if (bt == null) return -1;
+          return bt.compareTo(at); // newest first
+        });
+      controller.add(rows);
+    }
+
+    final sub1 = supabase
+        .from('chats')
+        .stream(primaryKey: ['id'])
+        .eq('user1_id', uid)
+        .listen((rows) {
+      asUser1
+        ..clear()
+        ..addEntries(rows.map((r) => MapEntry(r['id'].toString(), r)));
+      emit();
+    }, onError: controller.addError);
+
+    final sub2 = supabase
+        .from('chats')
+        .stream(primaryKey: ['id'])
+        .eq('user2_id', uid)
+        .listen((rows) {
+      asUser2
+        ..clear()
+        ..addEntries(rows.map((r) => MapEntry(r['id'].toString(), r)));
+      emit();
+    }, onError: controller.addError);
+
+    controller.onCancel = () async {
+      await sub1.cancel();
+      await sub2.cancel();
+    };
+
+    return controller.stream;
   }
 
   Future<void> _fetchUserName() async {
@@ -134,7 +223,7 @@ class _MessagesPageState extends State<MessagesPage> {
         page = const TravellerDashboard();
         break;
       case 1:
-        page = const WishlistPage();
+        page = const MyTripsPage();
         break;
       case 2:
         page = const AiChatbotPage();
@@ -161,25 +250,13 @@ class _MessagesPageState extends State<MessagesPage> {
           padding: const EdgeInsets.all(16),
           child: Column(
             children: [
-              Stack(
-                alignment: Alignment.bottomRight,
-                children: [
-                  const CircleAvatar(
-                    radius: 38,
-                    backgroundImage: AssetImage("assets/profile.jpg"),
-                  ),
-                  Container(
-                    decoration: BoxDecoration(
-                      color: primary,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 2),
-                    ),
-                    padding: const EdgeInsets.all(6),
-                    child:
-                        const Icon(Icons.edit, size: 18, color: Colors.white),
-                  ),
-                ],
-              ),
+                CircleAvatar(
+                  radius: 38,
+                  backgroundColor: primary.withOpacity(0.1),
+                  backgroundImage: profileImageUrl != null
+                      ? NetworkImage(profileImageUrl!)
+                      : const AssetImage("assets/pro.jpg") as ImageProvider,
+                ),
               const SizedBox(height: 12),
               Text(
                 "Welcome, $userName",
@@ -293,7 +370,7 @@ class _MessagesPageState extends State<MessagesPage> {
               ]
             : [
                 _bottomNavItem(Icons.home, "Home", 0),
-                _bottomNavItem(Icons.favorite, "Wishlist", 1),
+                _bottomNavItem(Icons.luggage_rounded, "Trips", 1),
                 _bottomNavItem(Icons.smart_toy_outlined, "Chatbot", 2),
                 _bottomNavItem(Icons.message_outlined, "Messages", 3),
                 _bottomNavItem(Icons.person_outline, "Profile", 4),

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
-import 'package:surfNstay/login_screen.dart';
+import 'auth_gate.dart';
 import 'host_dashboard.dart';
 import 'messages_page.dart';
 import 'traveller_dashboard.dart';
@@ -295,7 +295,7 @@ class _HostProfilePageState extends State<HostProfilePage> {
                         if (!mounted) return;
                         Navigator.pushAndRemoveUntil(
                           context,
-                          CustomPageRoute(child: const LoginScreen()),
+                          CustomPageRoute(child: const AuthGate()),
                           (route) => false,
                         );
                       },

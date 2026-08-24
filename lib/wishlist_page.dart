@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
-import 'traveller_dashboard.dart';
-import 'profile_page.dart';
-import 'messages_page.dart';
-import 'ai_chatbot_page.dart';
 import 'wishlist_service.dart';
 import 'RoomDetailPage.dart';
 
+/// Reached from Profile → My Wishlist. It is no longer a bottom-nav
+/// destination (the Trips tab took that slot), so it is a pushed route with a
+/// back button instead of its own nav bar.
 class WishlistPage extends StatefulWidget {
   const WishlistPage({super.key});
 
@@ -14,26 +13,8 @@ class WishlistPage extends StatefulWidget {
 }
 
 class _WishlistPageState extends State<WishlistPage> {
-  int _selectedIndex = 1;
-
   static const Color primary   = Color(0xFF0F4C5C);
   static const Color bg        = Color(0xFFF7F9FB);
-  static const Color textDark  = Color(0xFF1E293B);
-  static const Color textLight = Color(0xFF64748B);
-
-  void _onNavTap(int index) {
-    if (_selectedIndex == index) return;
-    Widget page;
-    switch (index) {
-      case 0: page = const TravellerDashboard(); break;
-      case 1: page = const WishlistPage();       break;
-      case 2: page = const AiChatbotPage();      break;
-      case 3: page = const MessagesPage();       break;
-      case 4: page = const ProfilePage();        break;
-      default: return;
-    }
-    Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => page));
-  }
 
   void _removeItem(String propertyId) {
     setState(() => WishlistService.instance.remove(propertyId));
@@ -68,6 +49,10 @@ class _WishlistPageState extends State<WishlistPage> {
               ),
               child: Row(
                 children: [
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    onPressed: () => Navigator.pop(context),
+                  ),
                   const Icon(Icons.favorite, color: Colors.white, size: 22),
                   const SizedBox(width: 10),
                   Text(
@@ -109,22 +94,6 @@ class _WishlistPageState extends State<WishlistPage> {
             ),
           ],
         ),
-      ),
-      bottomNavigationBar: BottomNavigationBar(
-        type: BottomNavigationBarType.fixed,
-        currentIndex: _selectedIndex,
-        backgroundColor: Colors.white,
-        selectedItemColor: Colors.white,
-        unselectedItemColor: textLight,
-        showUnselectedLabels: true,
-        items: [
-          _navItem(Icons.home,              "Home",     0),
-          _navItem(Icons.favorite,          "Wishlist", 1),
-          _navItem(Icons.smart_toy_outlined,"Chatbot",  2),
-          _navItem(Icons.message_outlined,  "Messages", 3),
-          _navItem(Icons.person_outline,    "Profile",  4),
-        ],
-        onTap: _onNavTap,
       ),
     );
   }
@@ -303,22 +272,4 @@ class _WishlistPageState extends State<WishlistPage> {
     );
   }
 
-  BottomNavigationBarItem _navItem(IconData icon, String label, int index) {
-    return BottomNavigationBarItem(
-      icon: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: _selectedIndex == index
-            ? BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF0F4C5C), Color(0xFF26C6DA)],
-                ),
-                borderRadius: BorderRadius.circular(12),
-              )
-            : null,
-        child: Icon(icon,
-            color: _selectedIndex == index ? Colors.white : textLight),
-      ),
-      label: label,
-    );
-  }
 }
