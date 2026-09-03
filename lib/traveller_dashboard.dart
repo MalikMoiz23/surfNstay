@@ -15,6 +15,7 @@ import 'NotificationScreen.dart';
 import 'package:badges/badges.dart' as badges;
 import 'wishlist_service.dart';
 import 'app_theme.dart';
+import 'ui_kit.dart';
 import 'page_transition.dart';
 
 class TravellerDashboard extends StatefulWidget {
@@ -246,19 +247,24 @@ class _TravellerDashboardState extends State<TravellerDashboard> {
   BottomNavigationBarItem _bottomNavItem(
       IconData icon, String label, int index) {
     return BottomNavigationBarItem(
-      icon: Container(
+      icon: AnimatedContainer(
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutBack,
         padding: const EdgeInsets.all(8),
-        decoration: _selectedIndex == index
-            ? BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: AppColors.primaryGradient,
-                ),
-                borderRadius: BorderRadius.circular(12),
-              )
-            : null,
-        child: Icon(
+        decoration: BoxDecoration(
+          gradient: _selectedIndex == index
+              ? const LinearGradient(colors: AppColors.primaryGradient)
+              : null,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: AnimatedScale(
+          scale: _selectedIndex == index ? 1.12 : 1,
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutBack,
+          child: Icon(
           icon,
           color: _selectedIndex == index ? Colors.white : textLight,
+        ),
         ),
       ),
       label: label,
@@ -861,9 +867,9 @@ class _TravellerDashboardState extends State<TravellerDashboard> {
                               child: const Icon(Icons.broken_image, size: 40, color: Colors.black38),
                             )
                           : Hero(
-                              tag: "property-image-",
-                              child: Image.network(
-                                images[0],
+                              tag: "property-image-" + propertyId,
+                              child: SmartImage(
+                                url: images[0],
                                 width: double.infinity,
                                 fit: BoxFit.cover,
                               ),

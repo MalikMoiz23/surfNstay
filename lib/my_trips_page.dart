@@ -5,6 +5,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'RoomDetailPage.dart';
 import 'ai_chatbot_page.dart';
 import 'app_theme.dart';
+import 'ui_kit.dart';
+import 'animations.dart';
 import 'formatting.dart';
 import 'messages_page.dart';
 import 'page_transition.dart';
@@ -226,17 +228,23 @@ class _MyTripsPageState extends State<MyTripsPage>
   BottomNavigationBarItem _bottomNavItem(
       IconData icon, String label, int index) {
     return BottomNavigationBarItem(
-      icon: Container(
+      icon: AnimatedContainer(
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutBack,
         padding: const EdgeInsets.all(8),
-        decoration: _selectedIndex == index
-            ? BoxDecoration(
-                gradient: const LinearGradient(
-                    colors: AppColors.primaryGradient),
-                borderRadius: BorderRadius.circular(12),
-              )
-            : null,
-        child: Icon(icon,
-            color: _selectedIndex == index ? Colors.white : textLight),
+        decoration: BoxDecoration(
+          gradient: _selectedIndex == index
+              ? const LinearGradient(colors: AppColors.primaryGradient)
+              : null,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: AnimatedScale(
+          scale: _selectedIndex == index ? 1.12 : 1,
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutBack,
+          child: Icon(icon,
+              color: _selectedIndex == index ? Colors.white : textLight),
+        ),
       ),
       label: label,
     );
@@ -363,9 +371,17 @@ class _MyTripsPageState extends State<MyTripsPage>
             ),
             Expanded(
               child: loading
-                  ? const Center(
-                      child: CircularProgressIndicator(
-                          color: AppColors.darkTeal))
+                  ? ListView(
+                      physics: const NeverScrollableScrollPhysics(),
+                      padding: const EdgeInsets.all(16),
+                      children: const [
+                        Shimmer(height: 150, radius: 20),
+                        SizedBox(height: 16),
+                        Shimmer(height: 150, radius: 20),
+                        SizedBox(height: 16),
+                        Shimmer(height: 150, radius: 20),
+                      ],
+                    )
                   : TabBarView(
                       controller: _tabController,
                       children: [
@@ -389,13 +405,11 @@ class _MyTripsPageState extends State<MyTripsPage>
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           children: [
-            const SizedBox(height: 120),
-            Icon(Icons.luggage_outlined, size: 64, color: Colors.grey.shade300),
-            const SizedBox(height: 16),
-            Center(
-              child: Text(emptyMessage,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: textLight)),
+            SizedBox(height: MediaQuery.of(context).size.height * 0.18),
+            EmptyState(
+              icon: Icons.luggage_outlined,
+              title: "Nothing here yet",
+              message: emptyMessage,
             ),
           ],
         ),
@@ -408,7 +422,8 @@ class _MyTripsPageState extends State<MyTripsPage>
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.all(16),
         itemCount: items.length,
-        itemBuilder: (context, i) => _buildCard(items[i]),
+        itemBuilder: (context, i) =>
+            FadeSlideIn(index: i, child: _buildCard(items[i])),
       ),
     );
   }
@@ -462,7 +477,7 @@ class _MyTripsPageState extends State<MyTripsPage>
                               child: const Icon(Icons.image_not_supported,
                                   color: Colors.black26),
                             )
-                          : Image.network(image.toString(), fit: BoxFit.cover),
+                          : SmartImage(url: image?.toString(), fit: BoxFit.cover),
                     ),
                   ),
                   const SizedBox(width: 14),

@@ -59,7 +59,7 @@ class _HostPublicProfilePageState extends State<HostPublicProfilePage> {
             .select('rating')
             .filter('property_id', 'in', propertyIds);
 
-        if (rRes != null && rRes.isNotEmpty) {
+        if (rRes.isNotEmpty) {
           double sum = 0;
           for (var r in rRes) {
             sum += (r['rating'] as num).toDouble();

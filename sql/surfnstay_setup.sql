@@ -781,6 +781,36 @@ end $$;
 --     authorisation. Every one establishes who the caller is first.
 -- ═════════════════════════════════════════════════════════════════════════════
 
+
+-- Postgres refuses CREATE OR REPLACE when a function's return type changes
+-- ("cannot change return type of existing function"). Re-running this file
+-- after a signature change would abort there, so every function it defines is
+-- dropped first, including any stale overloads left by an earlier version.
+--
+-- is_admin() and is_blocked() are deliberately NOT in this list: RLS policies
+-- depend on them, so dropping them would require CASCADE and would take the
+-- policies with it. Their signatures never change, so CREATE OR REPLACE is
+-- enough for those two.
+do $$
+declare r record;
+begin
+  for r in
+    select p.oid::regprocedure as sig
+      from pg_proc p
+     where p.pronamespace = 'public'::regnamespace
+       and p.proname in (
+         'refresh_booking_states', 'search_properties',
+         'property_unavailable_dates', 'create_booking',
+         'accept_booking', 'reject_booking', 'cancel_booking',
+         'host_cancel_booking', 'submit_host_verification',
+         'admin_log', 'admin_set_user_blocked', 'admin_resolve_report',
+         'admin_set_property_active', 'admin_review_host_verification'
+       )
+  loop
+    execute format('drop function if exists %s', r.sig);
+  end loop;
+end $$;
+
 -- ── refresh_booking_states ───────────────────────────────────────────────────
 -- Retires lapsed one-hour holds, checks in current stays and closes out
 -- finished ones. Nothing ever moved a booking to 'completed' before, which is
@@ -952,8 +982,6 @@ $$;
 -- The property row is locked FOR UPDATE, serialising every concurrent attempt
 -- against that property. Both notifications are written in the same
 -- transaction, so a booking can no longer exist without the host being told.
-drop function if exists public.create_booking(text, date, date, numeric);
-
 create or replace function public.create_booking(
   p_property_id text,
   p_start_date  date,

@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'ChatScreen.dart';
 import 'app_theme.dart';
 import 'formatting.dart';
+import 'ui_kit.dart';
 import 'page_transition.dart';
 import 'host_public_profile.dart';
 
@@ -1409,8 +1410,8 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
                             setState(() => _currentImageIndex = index);
                           },
                           itemCount: widget.images.length,
-                          itemBuilder: (context, index) => Image.network(
-                            widget.images[index],
+                          itemBuilder: (context, index) => SmartImage(
+                            url: widget.images[index],
                             fit: BoxFit.cover,
                           ),
                         ),

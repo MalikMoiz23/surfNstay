@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'animations.dart';
 import 'app_theme.dart';
 import 'page_transition.dart';
 
@@ -101,20 +102,27 @@ class _LoginScreenState extends State<LoginScreen> {
               padding: const EdgeInsets.all(24),
               child: Column(
                 children: [
-                  Image.asset('assets/logo.png', height: 200),
+                  FadeSlideIn(index: 0, offsetY: 40,
+                      child: Image.asset('assets/logo.png', height: 180)),
                   const SizedBox(height: 15),
-                  const Text(
-                    'Welcome to SurfNStay',
-                    style: TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white),
+                  const FadeSlideIn(
+                    index: 1,
+                    child: Text(
+                      'Welcome to SurfNStay',
+                      style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white),
+                    ),
                   ),
                   const SizedBox(height: 8),
-                  const Text(
-                    'Your journey to comfortable stays begins here',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 14, color: Colors.white70),
+                  const FadeSlideIn(
+                    index: 2,
+                    child: Text(
+                      'Your journey to comfortable stays begins here',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 14, color: Colors.white70),
+                    ),
                   ),
                   const SizedBox(height: 30),
 

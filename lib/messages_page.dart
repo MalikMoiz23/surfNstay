@@ -1,3 +1,4 @@
+import 'app_theme.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -502,18 +503,24 @@ class _MessagesPageState extends State<MessagesPage> {
   BottomNavigationBarItem _bottomNavItem(
       IconData icon, String label, int index) {
     return BottomNavigationBarItem(
-      icon: Container(
+      icon: AnimatedContainer(
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutBack,
         padding: const EdgeInsets.all(8),
-        decoration: _selectedIndex == index
-            ? BoxDecoration(
-                gradient: const LinearGradient(
-                    colors: [Color(0xFF0F4C5C), Color(0xFF26C6DA)]),
-                borderRadius: BorderRadius.circular(12),
-              )
-            : null,
-        child: Icon(
+        decoration: BoxDecoration(
+          gradient: _selectedIndex == index
+              ? const LinearGradient(colors: AppColors.primaryGradient)
+              : null,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: AnimatedScale(
+          scale: _selectedIndex == index ? 1.12 : 1,
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutBack,
+          child: Icon(
           icon,
           color: _selectedIndex == index ? Colors.white : textLight,
+        ),
         ),
       ),
       label: label,
